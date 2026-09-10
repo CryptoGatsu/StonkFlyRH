@@ -114,14 +114,14 @@ def build_parser():
     return p
 
 
-def env_products(default=("PONS",)):
+def env_products():
+    """Seed symbols from .env. Empty is fine: discovery fills the universe."""
     raw = os.environ.get("STONKFLYRH_PRODUCTS", "")
-    listed = tuple(p.strip().upper() for p in raw.replace(";", ",").split(",") if p.strip())
-    return listed or tuple(default)
+    return tuple(p.strip().upper() for p in raw.replace(";", ",").split(",") if p.strip())
 
 
 def settings_from(args, net_key):
-    products = tuple(args.products) if args.products else env_products()
+    products = tuple(args.products) if args.products is not None else env_products()
     return Settings(
         network=net_key,
         products=products,
@@ -198,7 +198,7 @@ def cmd_wallet(a):
 
 
 def cmd_chain(a):
-    products = a.products or list(Settings().products)
+    products = a.products or []
     net, client, registry, verified = chain_context(a.network, a.tokens, products)
     print(
         json.dumps(
@@ -218,7 +218,9 @@ def cmd_screen(a):
     from .pricing import build as build_oracle
     from .safety import RugScreen
 
-    products = a.products or list(Settings().products)
+    products = a.products or []
+    if not products:
+        raise SystemExit("Name the tokens to screen: screen --products PONS WOOF")
     settings = Settings(network=network(a.network).key, products=tuple(products))
     net, client, registry, verified = chain_context(
         net_key := settings.network, a.tokens, products, settings.pool_fee_tier
@@ -340,7 +342,8 @@ def cmd_start(a, parser):
             None, None, list(products), Settings(products=products).pool_fee_tier
         )
         say("chain", {"network": net.name, "chain_id": net.chain_id, "router": registry.router,
-                      "quote": verified["quote"]["symbol"], "seeds": list(products)})
+                      "quote": verified["quote"]["symbol"], "seeds": list(products),
+                      "discovery": os.environ.get("STONKFLYRH_DISCOVERY", "1") == "1"})
 
     # 4. run
     class Args:
@@ -645,11 +648,18 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
                 scan["dropped"] = dropped
             if scan.get("added") or dropped:
                 print(json.dumps({"discovery": scan}), flush=True)
-        market.products = ledger.products()
+        universe = ledger.products()
+        if not universe:
+            # Nothing to look at yet. Discovery runs on its own clock; wait for it.
+            print(json.dumps({"waiting": "discovery has admitted no token yet"}), flush=True)
+            until = started + min(settings.interval_seconds, 60)
+            while time.monotonic() < until and not (out / "STOP").exists():
+                time.sleep(1)
+            continue
+        market.products = universe
         quotes = market.snapshot(limits["order_limit"])
         guard.check(quotes, time.time(), eth_usd)
         market.record(quotes)
-        universe = ledger.products()
         product = universe[ledger.get("tick") % len(universe)]
         q = quotes[product]
         equity = ledger.equity(quotes, eth_usd)

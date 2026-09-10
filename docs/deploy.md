@@ -38,13 +38,15 @@ That is the only file. Open `/opt/stonkflyrh/.env`:
 | --- | --- |
 | `STONKFLYRH_MODE` | `paper` first. `live` when you mean it. |
 | `STONKFLYRH_CAPITAL_USD` / `STONKFLYRH_ORDER_USD` | `100` / `10` |
-| `STONKFLYRH_PRODUCTS` | seed symbols from `tokens.json`, e.g. `PONS` — discovery adds the rest |
+| `STONKFLYRH_PRODUCTS` | optional seed symbols from `tokens.json`; empty means discovery alone picks |
 | `STONKFLYRH_PRIVATE_KEY` | the fly wallet's key, **for the first live start only** |
 | `STONKFLYRH_KEYSTORE_PASSWORD` | a password for the keystore `start` writes |
 | `STONKFLYRH_LIVE` | `I_ACCEPT_REAL_ONCHAIN_TRADES`, live only |
 
-Then add the memecoins you want as seeds to `tokens.json` (address, decimals,
-pool fee). The Uniswap and USDG addresses are already there.
+Optionally add seed memecoins to `tokens.json` (address, decimals, pool fee) and
+list them in `STONKFLYRH_PRODUCTS`. The Uniswap and USDG addresses are already
+there; with no seeds the fly waits for discovery's first scan, then trades what
+it admits.
 
 ## 3. Paper first
 

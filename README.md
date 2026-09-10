@@ -70,8 +70,8 @@ Every launchpad on Robinhood Chain ends in a Uniswap pool, so the fly watches th
 place they all arrive: the v3 factory's `PoolCreated` events. Each new pool paired with
 USDG is a candidate; each candidate goes through the rug screen; only an approved token
 joins the universe the fly trades, up to `max_products`. A discovered token that later
-stops clearing the screen is dropped unless the fly holds it. Seeds you list in `.env`
-are always kept. Discovery decides what the fly may *see*; the screen decides what it
+stops clearing the screen is dropped unless the fly holds it. Seeds you list in `.env` are optional and
+always kept. Discovery decides what the fly may *see*; the screen decides what it
 may *buy*; the connectome decides whether it does.
 
 ## The rug screen

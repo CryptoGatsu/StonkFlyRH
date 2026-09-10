@@ -124,12 +124,13 @@ class Settings:
         if not NETWORKS[self.network].robinhood:
             raise ValueError("This fork trades Robinhood Chain only")
         if (
-            not self.products
-            or len(set(self.products)) != len(self.products)
+            len(set(self.products)) != len(self.products)
             or not all(isinstance(p, str) and SYMBOL.match(p) for p in self.products)
             or self.quote_symbol in self.products
         ):
             raise ValueError("Products must be distinct memecoin symbols, not the quote asset")
+        if not self.products and not self.discovery_enabled:
+            raise ValueError("With discovery off, at least one seed product is required")
         if not SYMBOL.match(self.quote_symbol) or not 0 <= self.quote_decimals <= 36:
             raise ValueError("Quote asset needs a symbol and plausible decimals")
         if len(self.products) > 8:

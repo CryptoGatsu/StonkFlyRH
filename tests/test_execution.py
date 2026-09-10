@@ -74,7 +74,7 @@ def test_nonfinite_money(value):
         dict(products=("A_B", "A-B")),
         dict(max_products=3, products=("A", "B", "C", "D")),
         dict(discovery_interval_seconds=30),
-        dict(products=()),
+        dict(products=(), discovery_enabled=False),
         dict(network="ethereum"),
         dict(protocol_fee_bps=301),
         dict(protocol_fee_bps=1.0),
@@ -110,6 +110,12 @@ def test_defaults_match_the_operators_stated_size():
     assert (s.quote_symbol, s.quote_decimals) == ("USDG", 6)
     assert s.network == "robinhood-mainnet"
     assert s.screen_enabled and s.adapt_enabled
+
+
+def test_seeds_are_optional_when_discovery_is_on():
+    assert Settings(products=()).products == ()
+    with pytest.raises(ValueError, match="at least one seed"):
+        Settings(products=(), discovery_enabled=False)
 
 
 def test_only_robinhood_chain_is_configurable():

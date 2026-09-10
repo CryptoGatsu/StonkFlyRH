@@ -10,10 +10,10 @@
     "about their factory, a token whose on-chain symbol or decimals differ from this",
     "file, and any pair with no pool at its fee tier. Check them on",
     "robinhoodchain.blockscout.com yourself as well.",
-    "The quote asset is USDG (6 decimals — verify confirms). Every memecoin is traded",
-    "against it, so dollar limits need no conversion. 'weth' is only used to value gas.",
-    "Memecoin addresses are yours to fill in. pool_fee is the Uniswap v3 tier in",
-    "hundredths of a bip: 500, 3000 or 10000. A Pons launch graduates into a 1% pool."
+    "The quote asset is USDG (6 decimals \u2014 verify confirms). Every memecoin is traded",
+    "Memecoin seeds are optional: leave 'tokens' empty and discovery fills the universe",
+    "from new USDG pools. To seed one, add: \"PONS\": {\"address\": \"0x...\", \"decimals\": 18,",
+    "\"pool_fee\": 10000} and list it in STONKFLYRH_PRODUCTS. pool_fee is the Uniswap v3 tier."
   ],
   "robinhood-mainnet": {
     "quote": {
@@ -27,13 +27,7 @@
     "quoter": "0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7",
     "factory": "0x1f7d7550b1b028f7571e69a784071f0205fd2efa",
     "eth_usd_feed": null,
-    "tokens": {
-      "PONS": {
-        "address": "0x0000000000000000000000000000000000000000",
-        "decimals": 18,
-        "pool_fee": 10000
-      }
-    }
+    "tokens": {}
   },
   "robinhood-testnet": {
     "quote": {
