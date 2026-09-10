@@ -1047,8 +1047,8 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
                 raise
             failures += 1
             wait = min(300, settings.rpc_error_backoff_seconds * failures)
-            print(json.dumps({"transient": type(e).__name__, "consecutive": failures,
-                              "retry_in_seconds": wait}), flush=True)
+            print(json.dumps({"transient": type(e).__name__, "reason": str(e)[:300],
+                              "consecutive": failures, "retry_in_seconds": wait}), flush=True)
             if failures >= settings.rpc_error_tolerance:
                 raise
             until = time.monotonic() + wait

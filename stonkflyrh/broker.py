@@ -300,7 +300,17 @@ class RobinhoodChainBroker:
                 raise UnresolvedOrder(
                     f"Broadcast outcome unknown for {tx_hash}; reconcile before trading again ({why})"
                 ) from e
-            raise BroadcastFailed(f"{label} transaction failed to broadcast: {why}") from e
+            # The node's pending count is the nonce to try next time: it covers
+            # a transaction of ours it holds but has not mined, and a node that
+            # lags on "latest".
+            try:
+                self._next_nonce = int(
+                    self.client.w3.eth.get_transaction_count(checksum(self.address), "pending")
+                )
+            except Exception:
+                pass
+            fields = {k: tx.get(k) for k in ("nonce", "gas", "gasPrice", "to")}
+            raise BroadcastFailed(f"{label} transaction failed to broadcast: {why}; tx {fields}") from e
         if "nonce" in tx:
             self._next_nonce = int(tx["nonce"]) + 1
         receipt = self._await(tx_hash)
