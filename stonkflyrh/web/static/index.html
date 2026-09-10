@@ -157,6 +157,8 @@
   .addr { font-size: 11px; color: var(--muted); word-break: break-all; }
 
   .donate { border: 1px solid var(--lime); background: var(--raise); padding: 14px 16px; margin: 14px 0 6px; box-shadow: 4px 4px 0 #000; }
+  .donate.paper { border-color: var(--amber); }
+  .donate-status { color: var(--amber); font: 700 9px/1.6 var(--pixel); letter-spacing: .1em; margin-bottom: 10px; }
   .donate-copy { margin: 0 0 12px; font-size: 12px; line-height: 1.7; color: var(--ink); }
   .donate-copy b { color: var(--lime); font-weight: 600; }
   .addr-box { display: flex; gap: 8px; align-items: center; background: var(--bg); border: 1px solid var(--line); padding: 10px 12px; }
@@ -268,6 +270,7 @@
 
         <section class="donate" id="donate" hidden>
           <div class="row-head"><span class="label ink">Feed the fly</span><span class="right" id="pool-cap">—</span></div>
+          <div class="donate-status" id="donate-status" hidden>NOT ACCEPTING YET — the fly is paper trading. Anything sent now is not credited. This panel goes live with the wallet.</div>
           <p class="donate-copy">Send <b>USDG on Robinhood Chain</b> to the fly wallet and it trades alongside the operator's stake. When your stake sets a new high, <b id="share-pct">50%</b> of the gain is sent back to the wallet you sent from; the rest stays with the fly. Below your high-water mark nothing is paid, and losses are yours.</p>
           <div class="addr-box">
             <code id="donate-addr">—</code>
@@ -331,7 +334,8 @@ document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () 
 /* ---------------- THE BAG ---------------- */
 function renderBag() {
   const initial = Number(meta.initial_cash);
-  const equity = Number(meta.equity_usd ?? (lastRow && lastRow.equity_usd));
+  const rawEquity = meta.equity_usd ?? (lastRow ? lastRow.equity_usd : null) ?? meta.cash;
+  const equity = rawEquity === null || rawEquity === undefined ? NaN : Number(rawEquity);
   if (Number.isFinite(equity)) {
     const [whole, cents] = equity.toFixed(2).split(".");
     $("equity").innerHTML = `$${Number(whole).toLocaleString()}<span class="cents">.${cents}</span>`;
@@ -454,10 +458,14 @@ function renderUniverse() {
 
 function renderDonations() {
   const conf = prov.donations || {};
-  const on = !!conf.enabled;
+  const on = !!conf.enabled || settings.donations_enabled === true;
+  const accepting = !!conf.enabled && meta.mode === "live";
   $("donate").hidden = !on;
   $("tab-donors").hidden = !on;
   if (!on) return;
+  $("donate-status").hidden = accepting;
+  $("copy-addr").hidden = !accepting;
+  $("donate").classList.toggle("paper", !accepting);
   const share = Math.round(Number(conf.donor_share ?? settings.donor_share ?? 0.5) * 100);
   $("share-pct").textContent = share + "%";
   $("min-don").textContent = usd(conf.min_usd ?? settings.donation_min_usd ?? 1, 0);
