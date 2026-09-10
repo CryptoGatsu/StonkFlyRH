@@ -89,6 +89,13 @@ class Settings:
     rug_drawdown: str = "0.5"
     rug_exit_spread: str = "0.5"
 
+    # -- resilience ----------------------------------------------------------
+    rpc_error_tolerance: int = 12
+    rpc_error_backoff_seconds: float = 20
+    # The operator's own launch: shown on the site, admitted past the universe
+    # cap once its pool appears and clears the screen. Screened like anything else.
+    coin_address: str = ""
+
     # -- discovery ----------------------------------------------------------
     discovery_enabled: bool = True
     discovery_interval_seconds: float = 600
@@ -181,6 +188,7 @@ class Settings:
         ):
             raise ValueError("Rate limit: >=60 s between orders, <=100 orders/day")
         self._check_screen()
+        self._check_resilience()
         self._check_discovery()
         self._check_donations()
         self._check_adaptation()
@@ -199,6 +207,16 @@ class Settings:
             raise ValueError("Pool cap must hold the operator's stake and stay under $100,000")
         if not D(0) < D(self.loss_stop_fraction) < 1:
             raise ValueError("Loss stop fraction must be between 0 and 1")
+
+    def _check_resilience(self):
+        if type(self.rpc_error_tolerance) is not int or not 1 <= self.rpc_error_tolerance <= 100:
+            raise ValueError("RPC error tolerance must be 1-100 consecutive failures")
+        if not math.isfinite(self.rpc_error_backoff_seconds) or not 1 <= self.rpc_error_backoff_seconds <= 600:
+            raise ValueError("RPC backoff must be 1-600 seconds")
+        if self.coin_address and (
+            not self.coin_address.startswith("0x") or len(self.coin_address) != 42
+        ):
+            raise ValueError("coin_address must be a 20-byte hex address")
 
     def _check_discovery(self):
         if type(self.discovery_enabled) is not bool:

@@ -138,7 +138,10 @@ address, its balances and every trade; that is what it is for, but know it.
 
 ## 6. Operating it
 
-The **worker does not auto-restart**. When it exits it has halted — loss stop,
+The worker backs off and retries on network errors, and systemd restarts it
+a minute after a crash; `start` resumes a run halted by a network failure on
+its own. A halt that needs judgement is different: **the worker exits cleanly
+and stays stopped**. When it exits it has halted — loss stop,
 an order it could not resolve, a balance that moved, a dependency error — and
 `runs/live/error.json` says why. Read it, reconcile against the explorer, then
 start it again (with `--resume-reviewed` for a transient halt; a loss stop cannot

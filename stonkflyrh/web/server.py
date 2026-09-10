@@ -131,6 +131,7 @@ def snapshot(out):
                     "screen",
                     "discovery",
                     "donations",
+                    "coin",
                     "settings",
                 ]
             }

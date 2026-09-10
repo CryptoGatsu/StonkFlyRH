@@ -137,6 +137,7 @@ def settings_from(args, net_key):
         discovery_enabled=not getattr(args, "no_discovery", False),
         donations_enabled=bool(getattr(args, "donations", False)),
         donor_share=os.environ.get("STONKFLYRH_DONOR_SHARE", "0.5"),
+        coin_address=os.environ.get("STONKFLYRH_COIN_ADDRESS", "").strip(),
         max_pool_usd=os.environ.get("STONKFLYRH_MAX_POOL_USD", "1000"),
         neural_ms=args.neural_ms,
         pulse_ms=min(200, args.neural_ms / 2),
@@ -460,6 +461,32 @@ def cmd_status(a):
     )
 
 
+# Errors a person cannot do anything about: the network hiccupped. The loop
+# backs off and tries again rather than halting an unattended run over them.
+def is_transient(exc):
+    import socket
+
+    names = {type(exc).__name__} | {c.__name__ for c in type(exc).__mro__}
+    transient = {
+        "HTTPError", "ConnectionError", "Timeout", "ReadTimeout", "ConnectTimeout",
+        "RequestException", "ChunkedEncodingError", "RemoteDisconnected", "ProtocolError",
+        "TimeoutError", "ConnectionResetError", "ConnectionRefusedError", "BrokenPipeError",
+        "gaierror", "timeout", "ProviderConnectionError", "TimeExhausted", "BadResponseFormat",
+        "HTTPStatusError", "ReadError", "ConnectError", "RemoteProtocolError", "TooManyRequests",
+    }
+    if names & transient:
+        return True
+    if isinstance(exc, (socket.timeout, OSError)) and not isinstance(exc, (FileNotFoundError, PermissionError)):
+        return True
+    text = str(exc).lower()
+    return any(k in text for k in ("429", "rate limit", "too many requests", "timed out", "502", "503", "504"))
+
+
+TRANSIENT_HALTS = {"HTTPError", "ConnectionError", "Timeout", "ReadTimeout", "TimeoutError",
+                   "ConnectionResetError", "RemoteDisconnected", "ProtocolError", "OSError",
+                   "ChunkedEncodingError", "TimeExhausted", "RequestException", "TransientRPC"}
+
+
 def cmd_run(a, parser):
     if a.live and (a.fixture or a.fast):
         parser.error("Live mode forbids fixtures and fast replay")
@@ -541,6 +568,23 @@ def cmd_run(a, parser):
             elif a.fixture:
                 donations = FixtureDonations(settings, ledger, pool)
             ledger.put("pool", pool.report(D(ledger.get("equity_usd") or ledger.cash)))
+        halted = ledger.get("halted")
+        if halted and not a.resume_reviewed:
+            if halted in TRANSIENT_HALTS and not ledger.pending():
+                # A network failure stopped the last process. Nothing about the
+                # money is in question; carry on.
+                print(json.dumps({"resumed_after": halted}), flush=True)
+                ledger.put("halted", None)
+            else:
+                print(
+                    json.dumps({
+                        "halted": halted,
+                        "action": "review runs/<mode>/error.json and the explorer, then start with "
+                                  "--resume-reviewed (a loss stop or fee overrun cannot be cleared)",
+                    }),
+                    flush=True,
+                )
+                return
         result = broker.preflight(eth_usd)
         print(json.dumps({**result, "eth_usd": str(eth_usd)}), flush=True)
         if a.resume_reviewed:
@@ -584,17 +628,26 @@ def cmd_run(a, parser):
         lock.close()
 
 
+def _coin_identity(settings, client):
+    if not settings.coin_address:
+        return None
+    coin = {"address": settings.coin_address}
+    if client is not None:
+        try:
+            coin.update(client.token_identity(settings.coin_address))
+        except Exception:
+            coin["note"] = "token not readable yet (still on the bonding curve?)"
+    return coin
+
+
 def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations=None, venue=None):
-    from PIL import Image
 
     from .actions import StonkflyRHActions
     from .data import verify
-    from .display import market_frame
     from .fees import fee_wallet
     from .neural.controller import FlyController
-    from .reinforcement import reinforcement
     from .discovery import FixtureDiscovery, PoolDiscovery
-    from .risk import Guard, Veto
+    from .risk import Guard
     from .safety import RugScreen, RugWatch
     from .wallet import address as wallet_address
     from .wallet import expected_address
@@ -654,6 +707,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         },
         "contracts": verified or {"note": "fixture run; no chain contracts used"},
         "usd_reference": oracle.report(),
+        "coin": _coin_identity(settings, client),
         "wallets": {
             "fly": wallet_address("trading"),
             "fly_expected": expected_address(),
@@ -704,10 +758,47 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
     provider = StonkflyRHActions(guard, broker, net.key)
     action = provider.get_actions()[0]
     count = 0
+    failures = 0
     while not a.steps or count < a.steps:
         started = time.monotonic()
         if (out / "STOP").exists() or ledger.get("halted"):
             break
+        try:
+            _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, provider,
+                  action, controller, screen, watch, discovery, donations)
+            failures = 0
+        except Exception as e:
+            # A trade in flight is never covered by this: the broker raises its
+            # own UnresolvedOrder for that, and that one halts.
+            if not is_transient(e) or ledger.pending() or type(e).__name__ == "UnresolvedOrder":
+                raise
+            failures += 1
+            wait = min(300, settings.rpc_error_backoff_seconds * failures)
+            print(json.dumps({"transient": type(e).__name__, "consecutive": failures,
+                              "retry_in_seconds": wait}), flush=True)
+            if failures >= settings.rpc_error_tolerance:
+                raise
+            until = time.monotonic() + wait
+            while time.monotonic() < until and not (out / "STOP").exists():
+                time.sleep(1)
+            continue
+        count += 1
+        if not a.fast and (not a.steps or count < a.steps):
+            until = started + settings.interval_seconds
+            while time.monotonic() < until and not (out / "STOP").exists():
+                time.sleep(min(1, until - time.monotonic()))
+
+
+def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, provider,
+          action, controller, screen, watch, discovery, donations):
+    """One observation: look, decide, maybe trade, record."""
+    from PIL import Image
+
+    from .display import market_frame
+    from .reinforcement import reinforcement
+    from .risk import Veto
+
+    if True:
         broker.reconcile()
         broker.verify_balances()
         eth_usd = oracle.eth_usd()
@@ -727,10 +818,10 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         if not universe:
             # Nothing to look at yet. Discovery runs on its own clock; wait for it.
             print(json.dumps({"waiting": "discovery has admitted no token yet"}), flush=True)
-            until = started + min(settings.interval_seconds, 60)
+            until = time.monotonic() + min(settings.interval_seconds, 60)
             while time.monotonic() < until and not (out / "STOP").exists():
                 time.sleep(1)
-            continue
+            return
         market.products = universe
         quotes = market.snapshot(limits["order_limit"])
         guard.check(quotes, time.time(), eth_usd)
@@ -854,11 +945,6 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             ),
             flush=True,
         )
-        count += 1
-        if not a.fast and (not a.steps or count < a.steps):
-            until = started + settings.interval_seconds
-            while time.monotonic() < until and not (out / "STOP").exists():
-                time.sleep(min(1, until - time.monotonic()))
 
 
 def main():

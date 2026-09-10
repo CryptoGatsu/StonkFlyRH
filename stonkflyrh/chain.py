@@ -384,7 +384,7 @@ class ChainClient:
         except Exception:
             return None
 
-    def logs(self, params, chunk=2000, pause=0.35, retries=6, max_blocks=None):
+    def logs(self, params, chunk=2000, pause=0.6, retries=8, max_blocks=None):
         """eth_getLogs over a block range the public RPC will actually serve.
 
         Public endpoints rate-limit and cap the range per call. This walks the

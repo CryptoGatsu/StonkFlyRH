@@ -111,6 +111,16 @@ losses.** Holdings stay exposed to the market after a halt — including a rugge
 see [the rug screen](safety.md).
 
 
+## Network errors
+
+The public RPC rate-limits. Log fetches are chunked, paced and retried with
+backoff; the observation loop treats a request error, timeout or 429 as
+transient, waits `rpc_error_backoff_seconds` × the consecutive count (capped at
+five minutes) and tries again, up to `rpc_error_tolerance` in a row. An error
+while an order is in flight is never transient. A run halted by a transient
+error resumes on the next start without review; a dedicated RPC endpoint
+(`STONKFLYRH_RPC_URL`) makes all of this rarer.
+
 ## Stopping
 
 `touch runs/live/STOP` stops before the next order and is checked again at the final send

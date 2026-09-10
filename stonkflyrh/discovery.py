@@ -83,9 +83,10 @@ class PoolDiscovery:
     """Scans factory logs for new quote-asset pools and screens what it finds."""
 
     CHUNK = 2000
-    # Blocks covered by one scan. The first scan of a fresh run has a 400k-block
-    # backlog; spreading it over several scans keeps each one a few requests.
-    MAX_BLOCKS_PER_SCAN = 60000
+    # Blocks covered by one scan, per venue. The first scan of a fresh run has a
+    # 400k-block backlog; spreading it keeps each scan to a handful of requests
+    # against a public RPC that rate-limits.
+    MAX_BLOCKS_PER_SCAN = 30000
 
     def __init__(self, settings, client, registry, ledger, market, screen, factory, venue=None):
         self.s = settings
@@ -238,14 +239,18 @@ class PoolDiscovery:
         report["candidates"] = len(fresh)
         report["skipped"] = len(candidates) - len(fresh)
         room = max(0, int(self.s.max_products) - len(universe))
+        coin = checksum(self.s.coin_address) if self.s.coin_address else None
+        # The operator's own coin is looked at first and is not subject to the cap.
+        fresh.sort(key=lambda c: 0 if c["token"] == coin else 1)
         for c in fresh[: int(self.s.discovery_batch)]:
-            if room <= 0:
+            if room <= 0 and c["token"] != coin:
                 report["rejected"].append({"address": c["token"], "reason": "universe full"})
                 self.l.mark_candidate(c["token"], "universe full", now)
                 continue
             outcome = self._consider(c, now, eth_usd)
             if outcome["added"]:
-                room -= 1
+                if c["token"] != coin:
+                    room -= 1
                 report["added"].append(outcome)
             else:
                 report["rejected"].append(outcome)

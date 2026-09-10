@@ -160,6 +160,10 @@
   .kv span { color: var(--muted); } .kv b { font-weight: 500; text-align: right; word-break: break-all; }
   .addr { font-size: 11px; color: var(--muted); word-break: break-all; }
 
+  .coin { border: 1px solid var(--cyan); background: var(--raise); padding: 14px 16px; margin: 14px 0 6px; box-shadow: 4px 4px 0 #000; }
+  .coin-name { display: flex; gap: 10px; align-items: baseline; margin: 0 0 10px; }
+  .coin-name b { font: 700 18px/1 var(--pixel); color: var(--cyan); letter-spacing: .08em; }
+  .coin-name span { color: var(--muted); font-size: 12px; }
   .donate { border: 1px solid var(--lime); background: var(--raise); padding: 14px 16px; margin: 14px 0 6px; box-shadow: 4px 4px 0 #000; }
   .donate.paper { border-color: var(--amber); }
   .donate-status { color: var(--amber); font: 700 9px/1.6 var(--pixel); letter-spacing: .1em; margin-bottom: 10px; }
@@ -271,6 +275,16 @@
         <div class="pane" id="pane-donors" hidden>
           <div id="donors"><div class="empty">No donors yet.</div></div>
         </div>
+
+        <section class="coin" id="coin" hidden>
+          <div class="row-head"><span class="label ink">The coin</span><span class="right" id="coin-state">—</span></div>
+          <div class="coin-name"><b id="coin-symbol">—</b><span id="coin-name"></span></div>
+          <div class="addr-box">
+            <code id="coin-addr">—</code>
+            <button class="chip dark" type="button" id="copy-coin">Copy</button>
+          </div>
+          <div class="donate-terms" id="coin-links"></div>
+        </section>
 
         <section class="donate" id="donate" hidden>
           <div class="row-head"><span class="label ink">Feed the fly</span><span class="right" id="pool-cap">—</span></div>
@@ -502,12 +516,31 @@ $("copy-addr").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText($("donate-addr").textContent); $("copy-addr").textContent = "Copied"; setTimeout(() => $("copy-addr").textContent = "Copy", 1500); } catch {}
 });
 
+function renderCoin() {
+  const coin = prov.coin;
+  $("coin").hidden = !coin;
+  if (!coin) return;
+  $("coin-symbol").textContent = coin.symbol ? "$" + coin.symbol : "COIN";
+  $("coin-name").textContent = coin.name && coin.name !== coin.symbol ? coin.name : (coin.note || "");
+  $("coin-addr").textContent = coin.address;
+  const inUniverse = Object.values(meta.universe || {}).find((e) => (e.address || "").toLowerCase() === coin.address.toLowerCase());
+  const held = inUniverse && Number((meta.positions || {})[inUniverse.symbol] || 0) > 0;
+  $("coin-state").textContent = held ? "held by the fly" : inUniverse ? "in the fly's universe" : "waiting for its pool";
+  const links = [];
+  if (explorer) links.push(`<a href="${esc(explorer)}/token/${esc(coin.address)}" target="_blank" rel="noopener">explorer</a>`);
+  links.push(`<a href="https://ponsfamily.com/token/${esc(coin.address)}" target="_blank" rel="noopener">pons</a>`);
+  $("coin-links").innerHTML = "The operator's launch on Pons, paired with GOOGL. Screened like any other token; the fly decides whether to hold it. · " + links.join(" · ");
+}
+$("copy-coin").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("coin-addr").textContent); $("copy-coin").textContent = "Copied"; setTimeout(() => $("copy-coin").textContent = "Copy", 1500); } catch {}
+});
+
 function renderState(s) {
   meta = s.meta || {}; prov = s.provenance || {}; settings = prov.settings || {};
   explorer = (prov.network && prov.network.explorer) || null;
   quoteSymbol = settings.quote_symbol || "USDG";
   $("quote-sym").textContent = quoteSymbol;
-  renderBag(); renderLimits(); renderScreens(); renderUniverse(); renderDonations();
+  renderBag(); renderLimits(); renderScreens(); renderUniverse(); renderDonations(); renderCoin();
 }
 
 /* ---------------- rows ---------------- */
