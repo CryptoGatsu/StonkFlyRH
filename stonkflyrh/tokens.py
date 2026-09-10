@@ -44,6 +44,19 @@ class Registry:
         )
         self.weth = checksum(section["weth"]) if section.get("weth") else None
         self.weth_pool_fee = int(section.get("weth_pool_fee", 500))
+        # Uniswap v4: one PoolManager for every pool, a quoter, a state reader,
+        # the Universal Router that executes, and Permit2 that it pulls through.
+        self.v4 = None
+        if section.get("v4"):
+            v4 = section["v4"]
+            self.v4 = {
+                k: checksum(v4[k])
+                for k in ("pool_manager", "quoter", "state_view", "universal_router", "permit2")
+            }
+            self.v4["hooks_allow"] = [checksum(h) for h in v4.get("hooks_allow", [])]
+            self.v4["hooks_allow_any"] = bool(v4.get("hooks_allow_any", False))
+            # Known assets with a USDG pool to route through (GOOGL, WETH, ...).
+            self.v4["bridges"] = list(v4.get("bridges", []))
         if self.weth and self.weth == self.quote_address:
             raise RuntimeError("weth cannot be the quote asset")
         self.tokens = {}
@@ -90,6 +103,8 @@ class Registry:
             "address": address,
             "decimals": int(entry["decimals"]),
             "pool_fee": int(entry["pool_fee"]),
+            "venue": entry.get("venue", "v3"),
+            "route": entry.get("route"),
         }
 
     def remove_token(self, symbol):
@@ -143,6 +158,11 @@ class Registry:
             if pool == ZERO_ADDRESS or not client.has_code(pool):
                 raise RuntimeError(f"No {symbol}/{self.quote_symbol} pool at fee tier {fee}")
             pools[symbol] = {"pool": pool, "fee": fee}
+        v4 = None
+        if self.v4:
+            for name in ("pool_manager", "quoter", "state_view", "universal_router", "permit2"):
+                client.require_code(self.v4[name], f"v4 {name}")
+            v4 = dict(self.v4)
         reference = None
         if self.eth_usd_feed:
             client.require_code(self.eth_usd_feed, "ETH/USD feed")
@@ -179,5 +199,6 @@ class Registry:
             "factory": factory,
             "quote": quote,
             "usd_reference": reference,
+            "v4": v4,
             "pools": pools,
         }

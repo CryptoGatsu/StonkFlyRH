@@ -95,6 +95,9 @@ class Settings:
     discovery_lookback_blocks: int = 400000
     discovery_batch: int = 12
     max_products: int = 12
+    discover_v3: bool = True
+    discover_v4: bool = True
+    min_pool_age_seconds: float = 1800
 
     # -- donations ----------------------------------------------------------
     donations_enabled: bool = True
@@ -208,6 +211,10 @@ class Settings:
             raise ValueError("Discovery screens 1-50 candidates a scan")
         if type(self.max_products) is not int or not len(self.products) <= self.max_products <= 24:
             raise ValueError("max_products must hold the seeds and be at most 24")
+        if type(self.discover_v3) is not bool or type(self.discover_v4) is not bool:
+            raise ValueError("discover_v3/discover_v4 are flags")
+        if not math.isfinite(self.min_pool_age_seconds) or self.min_pool_age_seconds < 0:
+            raise ValueError("Pool age floor must be a non-negative number of seconds")
 
     def _check_screen(self):
         if D(self.min_liquidity_usd) < 0:

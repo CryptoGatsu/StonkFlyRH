@@ -111,18 +111,35 @@ class RobinhoodChainMarket:
         self.products = list(settings.products)
         self.history = {p: [] for p in self.products}
         self.seeded = {}
+        # v4 products quote through a route of PoolKeys rather than the v3 quoter.
+        self.venue = None
+        self.routes = {}
 
-    def add_product(self, symbol, pool, fee):
+    def add_product(self, symbol, pool, fee, venue="v3", route=None):
         if symbol not in self.products:
             self.products.append(symbol)
         self.history.setdefault(symbol, [])
-        self.verified.setdefault("pools", {})[symbol] = {"pool": pool, "fee": fee}
+        self.verified.setdefault("pools", {})[symbol] = {"pool": pool, "fee": fee, "venue": venue}
+        if venue == "v4" and route:
+            self.routes[symbol] = list(route)
+        else:
+            self.routes.pop(symbol, None)
 
     def remove_product(self, symbol):
         if symbol in self.products:
             self.products.remove(symbol)
         self.history.pop(symbol, None)
         self.seeded.pop(symbol, None)
+        self.routes.pop(symbol, None)
+
+    def venue_of(self, symbol):
+        return (self.verified.get("pools", {}).get(symbol) or {}).get("venue", "v3")
+
+    def quote_call_for(self, symbol):
+        """The quoting function for one product, whichever venue holds it."""
+        if symbol in self.routes and self.venue is not None:
+            return self.venue.quote_call_for(self.routes[symbol])
+        return self.quote_call
 
     def quote_call(self, token_in, token_out, amount_in, fee):
         """Public: the rug screen and the stablecoin oracle price through this."""
@@ -181,14 +198,11 @@ class RobinhoodChainMarket:
             probe_quote_wei = to_wei(probe_quote, self.qd)
             if probe_quote_wei <= 0:
                 raise RuntimeError("Order limit rounds to zero quote units")
+            quote_call = self.quote_call_for(product)
             # Buy leg: what this run's own order size actually receives.
-            base_out = self.quote_call(
-                quote_token, entry["address"], probe_quote_wei, fee
-            )
+            base_out = quote_call(quote_token, entry["address"], probe_quote_wei, fee)
             # Sell leg: what that same quantity fetches back on the way out.
-            quote_back = self.quote_call(
-                entry["address"], quote_token, base_out, fee
-            )
+            quote_back = quote_call(entry["address"], quote_token, base_out, fee)
             probe_base = from_wei(base_out, base_decimals)
             ask = from_wei(probe_quote_wei, self.qd) / probe_base
             bid = from_wei(quote_back, self.qd) / probe_base
@@ -206,12 +220,17 @@ class RobinhoodChainMarket:
                 probe_base,
             )
             if not self.history[product]:
-                self.history[product] = self._seed(
-                    product,
-                    self.verified["pools"][product]["pool"],
-                    base_decimals,
-                    quote.mid,
-                )
+                if self.venue_of(product) == "v4":
+                    # v4 pools carry no oracle of their own; start flat.
+                    self.seeded[product] = "flat-from-first-observation"
+                    self.history[product] = [float(quote.mid)] * self.HISTORY
+                else:
+                    self.history[product] = self._seed(
+                        product,
+                        self.verified["pools"][product]["pool"],
+                        base_decimals,
+                        quote.mid,
+                    )
             result[product] = quote
         return result
 
@@ -239,10 +258,16 @@ class FixtureMarket:
         self.history = {p: [] for p in self.products}
         self.registry = None
 
-    def add_product(self, symbol, pool=None, fee=None):
+    def add_product(self, symbol, pool=None, fee=None, venue="v3", route=None):
         if symbol not in self.products:
             self.products.append(symbol)
         self.history.setdefault(symbol, [])
+
+    def quote_call_for(self, symbol):
+        return self.quote_call
+
+    def venue_of(self, symbol):
+        return "fixture"
 
     def remove_product(self, symbol):
         if symbol in self.products:

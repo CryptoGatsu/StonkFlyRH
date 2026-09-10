@@ -13,7 +13,14 @@
     "The quote asset is USDG (6 decimals \u2014 verify confirms). Every memecoin is traded",
     "Memecoin seeds are optional: leave 'tokens' empty and discovery fills the universe",
     "from new USDG pools. To seed one, add: \"PONS\": {\"address\": \"0x...\", \"decimals\": 18,",
-    "\"pool_fee\": 10000} and list it in STONKFLYRH_PRODUCTS. pool_fee is the Uniswap v3 tier."
+    "\"pool_fee\": 10000} and list it in STONKFLYRH_PRODUCTS. pool_fee is the Uniswap v3 tier.",
+    "The 'v4' block is where launchpad tokens live: Pons graduates every token into a",
+    "Uniswap v4 pool behind its hook. hooks_allow lists hooks whose pools discovery may",
+    "admit; the Pons V2 hook is pre-filled. Addresses are from Uniswap's sdk-core map and",
+    "Pons's docs; `chain verify` confirms each holds code.",
+    "'bridges' names assets with a USDG v4 pool the fly may route THROUGH to reach a",
+    "token paired with them (a coin launched against GOOGL, say). Give the USDG pool's",
+    "PoolKey. Hookless standard-fee USDG pools seen on chain are learned as bridges too."
   ],
   "robinhood-mainnet": {
     "quote": {
@@ -27,7 +34,31 @@
     "quoter": "0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7",
     "factory": "0x1f7d7550b1b028f7571e69a784071f0205fd2efa",
     "eth_usd_feed": null,
-    "tokens": {}
+    "tokens": {},
+    "v4": {
+      "pool_manager": "0x8366a39cc670b4001a1121b8f6a443a643e40951",
+      "quoter": "0x8dc178efb8111bb0973dd9d722ebeff267c98f94",
+      "state_view": "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b",
+      "universal_router": "0x8876789976decbfcbbbe364623c63652db8c0904",
+      "permit2": "0x000000000022d473030f116ddee9f6b43ac78ba3",
+      "hooks_allow": [
+        "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+      ],
+      "hooks_allow_any": false,
+      "bridges": [
+        {
+          "symbol": "GOOGL",
+          "_comment": "fill in the GOOGL/USDG v4 PoolKey; currencies sorted ascending",
+          "pool": {
+            "currency0": "0x0000000000000000000000000000000000000000",
+            "currency1": "0x0000000000000000000000000000000000000000",
+            "fee": 500,
+            "tickSpacing": 10,
+            "hooks": "0x0000000000000000000000000000000000000000"
+          }
+        }
+      ]
+    }
   },
   "robinhood-testnet": {
     "quote": {

@@ -448,7 +448,8 @@ function renderUniverse() {
   const rows = entries.map((e) => {
     const v = screens[e.symbol];
     const verdict = v ? `<span class="pill ${v.approved ? "ok" : "no"}">${v.approved ? "clear" : "withheld"}</span>` : `<span class="pill">unscreened</span>`;
-    const src = e.source === "seed" ? "seed" : e.source === "fixture" ? "discovered (fixture)" : "discovered";
+    const venue = e.venue === "v4" ? (e.via ? `v4 via ${esc(e.via)}` : "v4") : e.venue === "v3" ? "v3" : "";
+    const src = (e.source === "seed" ? "seed" : e.source === "fixture" ? "discovered (fixture)" : "discovered") + (venue ? " · " + venue : "");
     const when = e.added_at ? " · " + ago(e.added_at) : "";
     const link = e.address && explorer ? `<a href="${esc(explorer)}/address/${esc(e.address)}" target="_blank" rel="noopener">${shortHash(e.address)}</a>` : (e.address ? shortHash(e.address) : "");
     return `<div class="u-row"><div><b>${esc(e.symbol)}</b>${e.name && e.name !== e.symbol ? ` <span class="k" style="display:inline">${esc(e.name)}</span>` : ""}

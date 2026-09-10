@@ -500,6 +500,12 @@ def cmd_run(a, parser):
         if a.fixture
         else RobinhoodChainMarket(settings, client, registry, verified)
     )
+    venue = None
+    if not a.fixture and registry.v4:
+        from .v4 import V4Venue
+
+        venue = V4Venue(client, registry)
+        market.venue = venue
     oracle = build_oracle(client, registry, market, fixture=a.fixture)
     eth_usd = oracle.eth_usd()
     ledger = Ledger(
@@ -514,6 +520,8 @@ def cmd_run(a, parser):
             broker = RobinhoodChainBroker.from_env(
                 settings, ledger, client, registry, verified
             )
+            broker.v4 = venue
+            broker.routes = market.routes
         else:
             broker = PaperBroker(settings, ledger, {"trading": wallet_address("trading")})
         if settings.donations_enabled:
@@ -546,7 +554,7 @@ def cmd_run(a, parser):
             ledger.put("halted", None)
         if a.preflight_only:
             return
-        _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations)
+        _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations, venue)
     except KeyboardInterrupt:
         print("Stopped; run state preserved.", flush=True)
     except Exception as e:
@@ -576,7 +584,7 @@ def cmd_run(a, parser):
         lock.close()
 
 
-def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations=None):
+def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations=None, venue=None):
     from PIL import Image
 
     from .actions import StonkflyRHActions
@@ -605,7 +613,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         controller.restore(path)
 
     screen = (
-        RugScreen(settings, client, registry, ledger, market.quote_call)
+        RugScreen(settings, client, registry, ledger, market.quote_call, market)
         if settings.screen_enabled and not a.fixture
         else None
     )
@@ -619,9 +627,13 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         for symbol, entry in ledger.universe().items():
             if entry.get("source") != "seed" and entry.get("address"):
                 registry.add_token(entry)
-                market.add_product(symbol, entry["pool"], entry["pool_fee"])
+                market.add_product(
+                    symbol, entry["pool"], entry["pool_fee"], entry.get("venue", "v3"), entry.get("route")
+                )
         discovery = (
-            PoolDiscovery(settings, client, registry, ledger, market, screen, verified["factory"])
+            PoolDiscovery(
+                settings, client, registry, ledger, market, screen, verified["factory"], venue
+            )
             if settings.discovery_enabled and screen is not None
             else None
         )
@@ -647,6 +659,8 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             "enabled": discovery is not None,
             "interval_seconds": settings.discovery_interval_seconds,
             "max_products": settings.max_products,
+            "v3": settings.discover_v3,
+            "v4": settings.discover_v4 and venue is not None,
         },
         "donations": {
             "enabled": donations is not None,

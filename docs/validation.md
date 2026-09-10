@@ -24,6 +24,8 @@ and were not reproduced for this fork.
 | Website, 15 tests | Serves the page, state, trades and the sensory frame; no route reaches the ledger file, the keystore, a path traversal or a write method; the SSE cursor resumes from the client's last tick | Behaviour when exposed beyond localhost |
 | Live site rendered end to end | 24 paper ticks over four fictional tokens through the real guard, screen, watch, broker and poster: one token failed the screen (4/9) and was never bought; one passed 9/9, was bought four times, collapsed 79.5%, was recorded as a rug once, exited through the widened spread, and blocklisted; thresholds tightened to 1.5×; 12 posts drafted; rendered at 1320 px and 400 px with no console error | That the neural loop drove those ticks — the signals in that run were synthetic |
 
+| Uniswap v4, 12 + 9 tests | PoolKey ids and the canonical `Initialize` topic; single- and multi-hop Universal Router payloads decode back to the actions and amounts encoded; a Pons-hook USDG pool is admitted, an unknown hook is not, a hookless standard pool becomes a bridge, a GOOGL-paired coin routes through the GOOGL/USDG pool, a registry bridge works before any pool is seen, an unrouted pool waits for its bridge, native-ETH pairs are skipped, the v4 screen checks age and inferred depth | That the real Universal Router accepts the payload, that Permit2 approvals sequence correctly on chain, or that the Pons hook lets an arbitrary wallet swap |
+
 ## What was not verified
 
 - **The neural loop was never run.** Without the dataset, no observation reached the
@@ -36,6 +38,9 @@ and were not reproduced for this fork.
   deployment. `chain verify` and the rug screen have never been pointed at chain 4663. The screen's selector scan, proxy check and
   two-size tax measurement are exercised against a pool model, not a real memecoin. The
   registry ships empty for that reason.
+- **No v4 swap has been sent.** The router payload matches the documented action
+  layout and round-trips through the ABI decoder, but nothing has executed against the
+  real PoolManager or Permit2. The first live v4 swap is the untested step.
 - **No factory log was read from the chain.** Discovery's scanning, decoding and
   admission are tested on fabricated logs; block ranges, RPC log limits and the
   real cadence of Pons graduations are untested.

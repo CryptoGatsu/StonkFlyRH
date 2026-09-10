@@ -73,9 +73,11 @@ into equity by selling a probe of WETH into the USDG pool through the same quote
 
 ## Discovery
 
-Every launchpad on Robinhood Chain ends in a Uniswap pool, so the fly watches the one
-place they all arrive: the v3 factory's `PoolCreated` events. Each new pool paired with
-USDG is a candidate; each candidate goes through the rug screen; only an approved token
+Every launchpad on Robinhood Chain ends in a Uniswap pool, so the fly watches where they
+arrive: the v3 factory's `PoolCreated` events and the v4 PoolManager's `Initialize`
+events — v4 is where Pons graduates every token, behind its hook. A pool paired with USDG
+is a candidate directly; a pool paired with something that has its own USDG pool (a
+tokenized stock, WETH) is reached through it as a two-hop route. Each candidate each candidate goes through the rug screen; only an approved token
 joins the universe the fly trades, up to `max_products`. A discovered token that later
 stops clearing the screen is dropped unless the fly holds it. Seeds you list in `.env` are optional and
 always kept. Discovery decides what the fly may *see*; the screen decides what it

@@ -161,13 +161,24 @@ class RugScreen:
     # Comparing it against a full-size probe separates the two.
     SMALL_PROBE_DIVISOR = 1000
 
-    def __init__(self, settings, client, registry, ledger, quote_call):
+    def __init__(self, settings, client, registry, ledger, quote_call, market=None):
         self.s = settings
         self.client = client
         self.registry = registry
         self.l = ledger
         self.quote_call = quote_call
+        self.market = market
         self.selectors = dangerous_selectors()
+
+    def _quote_call(self, product):
+        if self.market is not None and hasattr(self.market, "quote_call_for"):
+            return self.market.quote_call_for(product)
+        return self.quote_call
+
+    def _venue(self, product):
+        if self.market is not None and hasattr(self.market, "venue_of"):
+            return self.market.venue_of(product)
+        return "v3"
 
     # -- adaptive thresholds -------------------------------------------------
 
@@ -283,6 +294,8 @@ class RugScreen:
         )
 
     def _pool(self, product, entry, pool, eth_usd):
+        if self._venue(product) == "v4":
+            return self._pool_v4(product, entry, pool)
         checks = []
         pool = checksum(pool)
         quote_token = self.registry.quote_address
@@ -318,10 +331,67 @@ class RugScreen:
                 cardinality,
             )
         )
+        checks += self._probes(product, entry, quote_token, fee, decimals, qd)
+        return checks
 
+    def _pool_v4(self, product, entry, pool):
+        """v4 pools live inside one singleton and carry no oracle, so depth is
+        inferred from the probes and age from the block the pool was created."""
+        checks = []
+        quote_token = self.registry.quote_address
+        fee = int(entry.get("pool_fee") or self.s.pool_fee_tier)
+        decimals = entry["decimals"]
+        qd = self.registry.quote_decimals
+        age = self._pool_age(entry)
+        checks.append(
+            Check(
+                "pool_age",
+                age is not None and age >= self.s.min_pool_age_seconds,
+                f"pool is {int(age)}s old, floor {int(self.s.min_pool_age_seconds)}s"
+                if age is not None
+                else "pool creation block unknown",
+                age,
+            )
+        )
+        probes = self._probes(product, entry, quote_token, fee, decimals, qd)
+        impact = next((c for c in probes if c.name == "price_impact"), None)
+        if impact is not None and impact.value is not None and D(impact.value) > 0:
+            # A route that moves the price by x% for an order of N dollars has
+            # about N/x dollars of effective depth on the way in; both sides
+            # together is roughly twice that.
+            depth = D(self.s.order_limit_usd) / D(impact.value) * 2
+        elif impact is not None and impact.value is not None:
+            depth = D(self.s.order_limit_usd) * 2000  # no measurable impact at this size
+        else:
+            depth = D(0)
+        floor = self.min_liquidity_usd()
+        checks.append(
+            Check(
+                "liquidity",
+                depth >= floor,
+                f"route depth about ${depth:.0f} inferred from price impact, floor ${floor:.0f}",
+                str(depth),
+            )
+        )
+        return checks + probes
+
+    def _pool_age(self, entry):
+        block = entry.get("discovered_block") or entry.get("initialized_block")
+        if not block:
+            return None
+        try:
+            created = int(self.client.w3.eth.get_block(int(block))["timestamp"])
+            latest = int(self.client.w3.eth.get_block("latest")["timestamp"])
+            return float(latest - created)
+        except Exception:
+            return None
+
+    def _probes(self, product, entry, quote_token, fee, decimals, qd):
+        checks = []
         order_probe = to_wei(self.s.order_limit_usd, qd)
         small_probe = max(1, order_probe // self.SMALL_PROBE_DIVISOR)
-        small = self._round_trip(entry["address"], quote_token, small_probe, fee, decimals)
+        quote_call = self._quote_call(product)
+        small = self._round_trip(entry["address"], quote_token, small_probe, fee, decimals, quote_call)
         if small is None:
             checks.append(
                 Check("sellable", False, "a token bought here could not be sold back", None)
@@ -342,7 +412,7 @@ class RugScreen:
             )
         )
 
-        big = self._round_trip(entry["address"], quote_token, order_probe, fee, decimals)
+        big = self._round_trip(entry["address"], quote_token, order_probe, fee, decimals, quote_call)
         if big is None:
             checks.append(
                 Check("price_impact", False, "order-size probe does not round trip", None)
@@ -361,11 +431,12 @@ class RugScreen:
         )
         return checks
 
-    def _round_trip(self, base, quote, probe_wei, fee, decimals):
+    def _round_trip(self, base, quote, probe_wei, fee, decimals, quote_call=None):
         """Fraction lost buying and immediately selling `probe_wei` of USDG."""
+        quote_call = quote_call or self.quote_call
         try:
-            base_out = self.quote_call(quote, base, probe_wei, fee)
-            quote_back = self.quote_call(base, quote, base_out, fee)
+            base_out = quote_call(quote, base, probe_wei, fee)
+            quote_back = quote_call(base, quote, base_out, fee)
         except Exception:
             return None
         if base_out <= 0 or quote_back <= 0:

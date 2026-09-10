@@ -17,6 +17,13 @@ import re
 
 from .chain import checksum
 from .config import D, POOL_FEE_TIERS, SYMBOL
+from . import v4 as v4mod
+
+# v4 fees are arbitrary; this flag marks a hook-set dynamic fee.
+V4_DYNAMIC_FEE = 0x800000
+V4_MAX_FEE = 100_000  # 10%
+# A plain (hookless) pool at a standard tier is a place to route *through*.
+BRIDGE_MAX_FEE = 3000
 
 POOL_CREATED = "PoolCreated(address,address,uint24,int24,address)"
 CLEAN = re.compile(r"[^A-Z0-9]")
@@ -80,7 +87,7 @@ class PoolDiscovery:
     # backlog; spreading it over several scans keeps each one a few requests.
     MAX_BLOCKS_PER_SCAN = 60000
 
-    def __init__(self, settings, client, registry, ledger, market, screen, factory):
+    def __init__(self, settings, client, registry, ledger, market, screen, factory, venue=None):
         self.s = settings
         self.client = client
         self.registry = registry
@@ -89,7 +96,48 @@ class PoolDiscovery:
         self.screen = screen
         self.factory = checksum(factory)
         self.topic = pool_created_topic()
+        self.venue = venue
+        self.v4_topic = v4mod.initialize_topic()
         self.last_scan = 0.0
+        if venue is not None:
+            self._seed_bridges()
+
+    # -- bridges: currencies with a known v4 route back to USDG ---------------
+
+    def _seed_bridges(self):
+        """Registry-declared bridges (GOOGL, WETH, ...) come first."""
+        bridges = self.l.get("bridges") or {}
+        for b in (self.registry.v4 or {}).get("bridges", []):
+            pool = b["pool"]
+            key = v4mod.pool_key(
+                pool["currency0"], pool["currency1"], pool["fee"], pool["tickSpacing"], pool["hooks"]
+            )
+            if self.registry.quote_address not in (key["currency0"], key["currency1"]):
+                raise RuntimeError(f"Bridge {b.get('symbol')} must be a USDG pool")
+            other = key["currency1"] if key["currency0"] == self.registry.quote_address else key["currency0"]
+            bridges[other] = {"symbol": b.get("symbol", other[:8]), "route": [key], "source": "registry"}
+        if bridges:
+            self.l.put("bridges", bridges)
+
+    def bridges(self):
+        return self.l.get("bridges") or {}
+
+    def _learn_bridge(self, created, other):
+        """A hookless USDG pool at a standard tier is a route others can use."""
+        if created["hooks"] != v4mod.NATIVE or created["fee"] > BRIDGE_MAX_FEE:
+            return
+        bridges = self.bridges()
+        if other in bridges:
+            return
+        key = v4mod.pool_key(created["currency0"], created["currency1"], created["fee"], created["tickSpacing"], created["hooks"])
+        bridges[other] = {"symbol": other[:8], "route": [key], "source": "observed", "block": created["block"]}
+        self.l.put("bridges", bridges)
+
+    def _hook_allowed(self, hooks):
+        conf = self.registry.v4 or {}
+        if hooks == v4mod.NATIVE or conf.get("hooks_allow_any"):
+            return True
+        return checksum(hooks) in conf.get("hooks_allow", [])
 
     def scan(self, now, eth_usd):
         self.last_scan = now
@@ -108,31 +156,76 @@ class PoolDiscovery:
         }
         if head <= start:
             return report
-        logs, scanned_to = self.client.logs(
-            {"fromBlock": start + 1, "toBlock": head, "address": self.factory, "topics": [self.topic]},
-            chunk=self.CHUNK,
-            max_blocks=self.MAX_BLOCKS_PER_SCAN,
-        )
+        candidates = []
+        scanned_to = head
+        quote = self.registry.quote_address
+        if self.s.discover_v3:
+            logs, scanned_to = self.client.logs(
+                {"fromBlock": start + 1, "toBlock": head, "address": self.factory, "topics": [self.topic]},
+                chunk=self.CHUNK,
+                max_blocks=self.MAX_BLOCKS_PER_SCAN,
+            )
+            for log in logs:
+                try:
+                    created = decode_pool_created(log)
+                except (ValueError, KeyError):
+                    continue
+                if created["fee"] not in POOL_FEE_TIERS:
+                    continue
+                if quote not in (created["token0"], created["token1"]):
+                    continue
+                other = created["token1"] if created["token0"] == quote else created["token0"]
+                if other in (quote, self.registry.weth):
+                    continue
+                candidates.append({**created, "token": other, "venue": "v3"})
+        if self.s.discover_v4 and self.venue is not None:
+            logs, v4_to = self.client.logs(
+                {
+                    "fromBlock": start + 1,
+                    "toBlock": head,
+                    "address": self.venue.pool_manager,
+                    "topics": [self.v4_topic],
+                },
+                chunk=self.CHUNK,
+                max_blocks=self.MAX_BLOCKS_PER_SCAN,
+            )
+            scanned_to = min(scanned_to, v4_to)
+            # Pools that only become reachable once a bridge exists wait here.
+            unrouted = list(self.l.get("unrouted_v4") or [])
+            for log in logs:
+                try:
+                    created = v4mod.decode_initialize(log)
+                except (ValueError, KeyError):
+                    continue
+                unrouted.append(created)
+            # Learn every bridge in the batch first, so a pool that arrived
+            # before its bridge did is routed in the same scan.
+            for created in unrouted[-400:]:
+                if quote in (created["currency0"], created["currency1"]):
+                    other = created["currency1"] if created["currency0"] == quote else created["currency0"]
+                    if other != quote:
+                        self._learn_bridge(created, other)
+            still = []
+            for created in unrouted[-400:]:
+                c = self._route_v4(created, quote)
+                if c is None:
+                    still.append(created)
+                elif c:
+                    candidates.append(c)
+            self.l.put("unrouted_v4", still[-200:])
         report["to_block"] = scanned_to
         report["backlog_blocks"] = head - scanned_to
         self.l.put("discovery_backlog", head - scanned_to)
-        candidates = []
-        for log in logs:
-            try:
-                created = decode_pool_created(log)
-            except (ValueError, KeyError):
-                continue
-            if created["fee"] not in POOL_FEE_TIERS:
-                continue
-            quote = self.registry.quote_address
-            if quote not in (created["token0"], created["token1"]):
-                continue
-            other = created["token1"] if created["token0"] == quote else created["token0"]
-            if other in (quote, self.registry.weth):
-                continue
-            candidates.append({**created, "token": other})
         # Newest first; a pool the run already knows about is not a candidate.
         candidates.sort(key=lambda c: -c["block"])
+        seen = set()
+        unique = []
+        for c in candidates:
+            if c["token"] in seen:
+                continue
+            seen.add(c["token"])
+            unique.append(c)
+        candidates = unique
         universe = self.l.universe()
         known = {e.get("address") for e in universe.values()} | set(self.l.seen_candidates())
         fresh = [c for c in candidates if c["token"] not in known]
@@ -160,6 +253,39 @@ class PoolDiscovery:
         interval = 60 if behind else self.s.discovery_interval_seconds
         return now - self.last_scan >= interval
 
+    def _route_v4(self, created, quote):
+        """A v4 pool becomes a candidate when USDG can reach its token.
+
+        Returns a candidate dict, None to keep waiting for a bridge, or False
+        to drop it for good.
+        """
+        c0, c1 = created["currency0"], created["currency1"]
+        if v4mod.NATIVE in (c0, c1):
+            return False  # native-ETH pairs are not routed in this version
+        fee = created["fee"]
+        if fee != V4_DYNAMIC_FEE and fee > V4_MAX_FEE:
+            return False
+        if not self._hook_allowed(created["hooks"]):
+            return False
+        key = v4mod.pool_key(c0, c1, fee, created["tickSpacing"], created["hooks"])
+        if quote in (c0, c1):
+            other = c1 if c0 == quote else c0
+            if other == self.registry.weth or other in self.bridges():
+                # Plain USDG pools for known assets are routes, not memecoins.
+                self._learn_bridge(created, other)
+                return False
+            self._learn_bridge(created, other)
+            if created["hooks"] == v4mod.NATIVE and fee <= BRIDGE_MAX_FEE:
+                return False  # a standard hookless pool is a bridge, not a launch
+            return {**created, "token": other, "venue": "v4", "route": [key], "pool": v4mod.pool_id(key)}
+        bridges = self.bridges()
+        for side, other in ((c0, c1), (c1, c0)):
+            if side in bridges:
+                route = [dict(k) for k in bridges[side]["route"]] + [key]
+                return {**created, "token": other, "venue": "v4", "route": route,
+                        "pool": v4mod.pool_id(key), "via": bridges[side].get("symbol")}
+        return None
+
     def _consider(self, created, now, eth_usd):
         address = created["token"]
         try:
@@ -171,6 +297,7 @@ class PoolDiscovery:
         if self.l.is_blocked(symbol):
             self.l.mark_candidate(address, "blocklisted symbol", now)
             return {"address": address, "symbol": symbol, "added": False, "reason": "blocklisted"}
+        venue = created.get("venue", "v3")
         entry = {
             "symbol": symbol,
             "name": str(identity["symbol"])[:32],
@@ -178,12 +305,16 @@ class PoolDiscovery:
             "decimals": int(identity["decimals"]),
             "pool_fee": int(created["fee"]),
             "pool": created["pool"],
-            "source": "factory:PoolCreated",
+            "venue": venue,
+            "route": created.get("route"),
+            "hooks": created.get("hooks"),
+            "via": created.get("via"),
+            "source": "factory:PoolCreated" if venue == "v3" else "v4:Initialize",
             "discovered_block": created["block"],
             "added_at": now,
         }
         self.registry.add_token(entry)
-        self.market.add_product(symbol, entry["pool"], entry["pool_fee"])
+        self.market.add_product(symbol, entry["pool"], entry["pool_fee"], venue, entry.get("route"))
         verdict = self.screen.assess(symbol, entry["pool"], eth_usd, now, force=True)
         if not verdict.approved:
             self.registry.remove_token(symbol)

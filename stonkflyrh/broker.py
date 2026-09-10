@@ -115,6 +115,9 @@ class RobinhoodChainBroker:
         # Called before every balance check so recognised donations are booked
         # as deposits before the wallet is compared with the ledger.
         self.inflows = None
+        # v4: the venue and the live map of product -> route, shared with the market.
+        self.v4 = None
+        self.routes = {}
 
     @classmethod
     def from_env(cls, settings, ledger, client, registry, verified):
@@ -316,6 +319,8 @@ class RobinhoodChainBroker:
             time.sleep(2)
 
     def execute(self, p, before_submit):
+        if p["product"] in self.routes and self.v4 is not None:
+            return self._execute_v4(p, before_submit)
         cid = p["client_order_id"]
         product = p["product"]
         token_in = self.token_address(p, "in")
@@ -361,6 +366,65 @@ class RobinhoodChainBroker:
             self.l.charge_gas(
                 approval_gas + receipt["gas_used"] * receipt["effective_gas_price"]
             )
+            return {"mode": "live", "status": "REVERTED", "tx_hash": receipt["tx_hash"]}
+        return self._book(cid, p, receipt, before, approval_gas)
+
+    # -- v4 -------------------------------------------------------------------
+
+    def _ensure_permit2(self, token, amount, gas_price):
+        """The Universal Router pulls tokens through Permit2: the token must
+        allow Permit2, and Permit2 must allow the router, for this amount."""
+        from .v4 import MAX_UINT48
+
+        gas = 0
+        erc20 = self.client.erc20(token)
+        permit2 = self.v4.permit2_address
+        if int(erc20.functions.allowance(self.address, permit2).call()) < amount:
+            tx = erc20.functions.approve(permit2, int(amount)).build_transaction(
+                self._tx_fields(gas_price, gas=120000)
+            )
+            r = self._send(tx, "approve permit2")
+            gas += r["gas_used"] * r["effective_gas_price"]
+        allowed, expiration = self.v4.permit2_allowance(self.address, token)
+        now = int(time.time())
+        if allowed < amount or expiration <= now + 60:
+            tx = self.v4.build_permit2_approve(
+                token, int(amount), min(MAX_UINT48, now + 3600), self._tx_fields(gas_price, gas=120000)
+            )
+            r = self._send(tx, "permit2 approve")
+            gas += r["gas_used"] * r["effective_gas_price"]
+        return gas
+
+    def _execute_v4(self, p, before_submit):
+        cid = p["client_order_id"]
+        product = p["product"]
+        route = self.routes[product]
+        token_in = self.token_address(p, "in")
+        amount_in = int(p["amount_in_wei"])
+        min_out = int(p["min_out_wei"])
+        approval_gas = 0
+        try:
+            gas_price = self._gas_price()
+            self.verify_balances()
+            before = self.balances(product)
+            if before["gas"] < gas_price * self.s.gas_limit:
+                raise Veto("Insufficient ETH for gas at the current price")
+            approval_gas = self._ensure_permit2(token_in, amount_in, gas_price)
+            deadline = int(time.time()) + 120
+            call = self.v4.swap_call(route, token_in, amount_in, min_out, deadline)
+            # execute() returns nothing; a revert here is the signal, and costs no gas.
+            call.call({"from": self.address})
+            if time.time() - p["quote_timestamp"] > self.s.max_quote_age:
+                raise Veto("Quote expired during simulation")
+            before_submit(p)
+        except Exception:
+            self.l.charge_gas(approval_gas)
+            self.l.mark(cid, "REJECTED")
+            raise
+        tx = call.build_transaction(self._tx_fields(gas_price))
+        receipt = self._send(tx, "v4 swap", order_id=cid)
+        if receipt["status"] != 1:
+            self.l.charge_gas(approval_gas + receipt["gas_used"] * receipt["effective_gas_price"])
             return {"mode": "live", "status": "REVERTED", "tx_hash": receipt["tx_hash"]}
         return self._book(cid, p, receipt, before, approval_gas)
 

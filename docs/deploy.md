@@ -13,8 +13,13 @@ about appears — that is what protects you from booking a transfer as profit. A
 creator allocation of your own coin sitting in the fly wallet trips both.
 
 Launch from another wallet you control. Fund the fly wallet with USDG and gas
-only. If you want the fly to trade your coin, add it to `tokens.json` like any
-other memecoin, once it has graduated to its Uniswap pool.
+only. Discovery will find your coin once it graduates to its Uniswap v4 pool —
+provided USDG can reach it. Pair it with USDG and it is one hop. Pair it with
+GOOGL (or any tokenized stock) and the fly routes USDG → GOOGL → coin in one
+transaction, paying two pool fees each way and carrying GOOGL's price moves
+inside the memecoin position; put the GOOGL/USDG PoolKey under `v4.bridges` in
+`tokens.json` so the route exists before the pool does. Pair it with ETH and this
+version will not trade it.
 
 ## 1. Install
 

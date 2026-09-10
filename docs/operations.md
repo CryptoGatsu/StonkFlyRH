@@ -143,6 +143,17 @@ rejected ones are remembered so they are not screened again. After a scan, every
 discovered token the fly does not hold is re-screened and dropped if it no longer clears.
 Seeds from `STONKFLYRH_PRODUCTS` are never dropped.
 
+**Uniswap v4.** Pons V2 graduates tokens into v4 pools behind the Pons hook, so the
+worker also reads the PoolManager's `Initialize` events. A v4 pool is admitted when its
+hook is on `hooks_allow` in the registry (the Pons hook is pre-filled; hookless pools
+are always allowed) and USDG can reach its token: directly, or through a **bridge** — a
+USDG pool for the pair asset. Bridges come from the registry (`v4.bridges`, e.g. a
+GOOGL/USDG PoolKey) and from hookless standard-fee USDG pools seen on chain. A launch
+paired with an asset that has no bridge yet waits, and is routed the moment one appears.
+Native-ETH pairs are not routed in this version. Trades on v4 go through the Universal
+Router via Permit2, single-hop or multi-hop in one transaction; the screen infers depth
+from price impact and checks pool age instead of v3's oracle history.
+
 Symbols are normalised to uppercase alphanumerics and a collision gets four hex
 characters of the address appended, so two tokens calling themselves PEPE stay two
 tokens. `STONKFLYRH_DISCOVERY=0` trades only the seeds.
