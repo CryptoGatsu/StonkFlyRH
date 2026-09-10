@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw
 
 
 def tick_label(value):
-    """Memecoin prices in WETH are tiny; keep four significant figures."""
+    """Memecoin prices are tiny; keep four significant figures."""
     d = Decimal(str(value)).normalize()
     if d == 0:
         return "0"
@@ -23,11 +23,11 @@ def tick_label(value):
     return "".join(out)
 
 
-def market_frame(product, history, bid, ask):
+def market_frame(product, history, bid, ask, quote="USDG"):
     im = Image.new("RGB", (320, 180), (235, 240, 249))
     d = ImageDraw.Draw(im)
     d.rectangle((0, 0, 319, 27), fill=(19, 36, 71))
-    d.text((9, 8), f"{product}/WETH", fill=(219, 229, 249))
+    d.text((9, 8), f"{product}/{quote}", fill=(219, 229, 249))
     for x in range(12, 310, 30):
         d.line((x, 34, x, 160), fill=(200, 212, 233))
     for y in range(38, 162, 24):

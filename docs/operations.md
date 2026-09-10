@@ -22,18 +22,33 @@ trading against the wrong chain.
 
 ## Contract registry
 
-`tokens.json` holds the WETH address, the Uniswap v3 router and quoter, and one entry per
-memecoin with its address, decimals and pool fee tier. Nothing is shipped filled in.
-`python -m stonkflyrh chain verify` checks, before any run:
+`tokens.json` holds the quote asset (USDG), WETH, the Uniswap v3 router and quoter, and
+one entry per memecoin with its address, decimals and pool fee tier.
+
+The example file is pre-filled for mainnet from two records that agree with each other —
+Uniswap's `deployments/4663.md` and its `sdk-core` address map — plus the USDG address
+Blockscout lists:
+
+| Contract | Address |
+| --- | --- |
+| USDG (quote) | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` |
+| WETH9 | `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73` |
+| SwapRouter02 | `0xcaf681a66d020601342297493863e78c959e5cb2` |
+| QuoterV2 | `0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7` |
+| UniswapV3Factory | `0x1f7d7550b1b028f7571e69a784071f0205fd2efa` |
+
+None of these were confirmed against the chain from inside this repository, and USDG's
+decimals (6) are assumed from the Ethereum deployment. `python -m stonkflyrh chain verify`
+is what confirms them, before any run:
 
 - the router and quoter hold code, and report the same factory;
-- the factory holds code, and has a pool for every traded pair at its fee tier;
-- the quote asset really is 18-decimal WETH;
-- each token's on-chain `symbol()` and `decimals()` match what you wrote.
+- the factory holds code, and has a pool for every traded pair at its fee tier, and a
+  WETH/USDG pool at `weth_pool_fee` for valuing gas;
+- the quote token's on-chain `symbol()` and `decimals()` are what the file says;
+- each memecoin's on-chain `symbol()` and `decimals()` match what you wrote.
 
-Verify addresses yourself against the Robinhood Chain explorer and the Uniswap
-deployments list before you put them in the file. These checks catch a typo or a stale
-address; they cannot tell you that a contract is the one you meant.
+Check them on robinhoodchain.blockscout.com yourself as well. These checks catch a typo
+or a stale address; they cannot tell you that a contract is the one you meant.
 
 ## Wallets
 
@@ -53,19 +68,22 @@ password in the environment; leave it unset to be prompted.
 
 ## Dollar limits
 
-`capital_usd`, `order_limit_usd`, `min_order_usd` and `loss_stop_usd` are converted to
-WETH at every observation from the ETH/USD reference the registry names: a Chainlink
-aggregator (`eth_usd_feed`, preferred) or a stablecoin pool (`stable`) priced through
-the same quoter the run trades with. A stale, non-positive or implausible price stops
-the run rather than resizing every order off it. Live preflight refuses a wallet funded
-past the dollar cap.
+The quote asset is USDG, so `capital_usd`, `order_limit_usd`, `min_order_usd` and
+`loss_stop_usd` are the ledger's own units: a $10 order is 10 USDG. Live preflight
+refuses a wallet funded past the dollar cap.
+
+Gas is ETH. To subtract it from equity honestly the run needs ETH/USD, taken by default
+from selling a 0.01 WETH probe into the USDG pool through the quoter (`weth` in the
+registry), or from a Chainlink aggregator (`eth_usd_feed`). A non-positive or implausible
+price stops the run.
 
 ## Fees
 
 `protocol_fee_bps` defaults to 0: with both wallets yours, a fee would only move your
-own money and pay gas to do it. When set, every fill accrues the fee in WETH in the same
+own money and pay gas to do it. When set, every fill accrues the fee in USDG in the same
 transaction as the settlement, owed to the fee wallet. Accrued fees stay in the fly
 wallet until swept, which is why the balance check expects cash *plus* unswept fees.
+Fees and sweeps are in USDG.
 
 ```sh
 python -m stonkflyrh fees --out runs/live --dry-run   # what would be sent

@@ -73,7 +73,8 @@ class FakeClient:
 
 
 class FakeRegistry:
-    quote_address = WETH
+    quote_address = WETH  # stands in for USDG here; only the address matters
+    quote_decimals = QUOTE_DECIMALS
     router = "0x" + "55" * 20
     quoter = "0x" + "66" * 20
 
@@ -249,19 +250,20 @@ def test_an_external_transfer_stops_the_run(tmp_path):
         ledger.close()
 
 
-def test_live_preflight_needs_the_price_reference(tmp_path):
-    client = FakeClient(quote_wei=to_wei(CAPITAL, QUOTE_DECIMALS))
+def test_live_preflight_initialises_cash_from_the_wallet(tmp_path):
+    client = FakeClient(quote_wei=to_wei("80", QUOTE_DECIMALS))
     b, ledger, _ = broker(tmp_path, client)
     try:
-        with pytest.raises(RuntimeError, match="ETH/USD reference"):
-            b.preflight()
+        report = b.preflight(ETH_USD)
+        assert report["fly_wallet"] == TRADER
+        assert ledger.cash == D("80")
     finally:
         ledger.close()
 
 
 def test_live_preflight_caps_funding_at_the_dollar_limit(tmp_path):
     # $150 in the wallet against a $100 configured stake.
-    client = FakeClient(quote_wei=to_wei(D("150") / ETH_USD, QUOTE_DECIMALS))
+    client = FakeClient(quote_wei=to_wei("150", QUOTE_DECIMALS))
     b, ledger, _ = broker(tmp_path, client)
     try:
         with pytest.raises(RuntimeError, match=r"\$100 cap"):
@@ -318,7 +320,8 @@ def test_dry_run_reports_what_is_owed_without_sending(tmp_path):
 def test_a_sweep_below_the_threshold_is_skipped(tmp_path):
     s, ledger = sweeper(tmp_path, FakeClient(quote_wei=10**18))
     try:
-        ledger.fees.accrue("order-1", 10**12, 100, 0)
+        # A 10-cent fee on 6-decimal USDG sits under the 1 USDG sweep floor.
+        ledger.fees.accrue("order-1", 10**7, 100, 0)
         assert s.sweep()["payouts"][0]["status"] == "BELOW_THRESHOLD"
     finally:
         ledger.close()

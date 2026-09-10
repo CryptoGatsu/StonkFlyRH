@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 
 from .chain import QUOTER_ABI, checksum
-from .config import D, QUOTE_DECIMALS, from_wei, to_wei
+from .config import D, from_wei, to_wei
 
 POOL_ABI = [
     {
@@ -45,7 +45,7 @@ POOL_ABI = [
 
 @dataclass(frozen=True)
 class Quote:
-    """WETH per whole token, at the size this run would actually trade."""
+    """Quote asset (USDG) per whole token, at the size this run would trade."""
 
     product: str
     bid: Decimal
@@ -65,7 +65,7 @@ class Quote:
             or not math.isfinite(self.timestamp)
         ):
             raise ValueError("Invalid quote")
-        if not 0 <= self.base_decimals <= 36 or self.quote_decimals != QUOTE_DECIMALS:
+        if not 0 <= self.base_decimals <= 36 or not 0 <= self.quote_decimals <= 36:
             raise ValueError("Invalid token decimals")
         if self.probe_quote <= 0 or self.probe_base <= 0:
             raise ValueError("Quote probe must be positive")
@@ -84,12 +84,12 @@ class Quote:
         }
 
 
-def tick_to_price(tick, base_decimals, base_is_token0):
-    """Uniswap tick to WETH per whole memecoin."""
+def tick_to_price(tick, base_decimals, base_is_token0, quote_decimals=6):
+    """Uniswap tick to quote asset per whole memecoin."""
     raw = D(str(1.0001**tick))
     if base_is_token0:
-        return raw * (D(10) ** (base_decimals - QUOTE_DECIMALS))
-    other = raw * (D(10) ** (QUOTE_DECIMALS - base_decimals))
+        return raw * (D(10) ** (base_decimals - quote_decimals))
+    other = raw * (D(10) ** (quote_decimals - base_decimals))
     if other <= 0:
         raise ValueError("Degenerate pool price")
     return 1 / other
@@ -107,6 +107,7 @@ class RobinhoodChainMarket:
         self.verified = verified
         self.products = settings.products
         self.quoter = client.contract(registry.quoter, QUOTER_ABI)
+        self.qd = int(registry.quote_decimals)
         self.history = {p: [] for p in self.products}
         self.seeded = {}
 
@@ -141,7 +142,9 @@ class RobinhoodChainMarket:
             series = []
             for older, newer in zip(cumulatives, cumulatives[1:]):
                 avg_tick = int((int(newer) - int(older)) / step)
-                series.append(float(tick_to_price(avg_tick, base_decimals, base_is_token0)))
+                series.append(
+                    float(tick_to_price(avg_tick, base_decimals, base_is_token0, self.qd))
+                )
             if not series or any(not math.isfinite(v) or v <= 0 for v in series):
                 raise RuntimeError("Oracle produced an unusable series")
             self.seeded[product] = "pool-twap"
@@ -152,8 +155,8 @@ class RobinhoodChainMarket:
             self.seeded[product] = "flat-from-first-observation"
             return [float(mid)] * self.HISTORY
 
-    def snapshot(self, probe_weth):
-        """Price both legs at `probe_weth`, the size this run would trade."""
+    def snapshot(self, probe_quote):
+        """Price both legs at `probe_quote` USDG, the size this run would trade."""
         result = {}
         now = time.time()
         for product in self.products:
@@ -161,7 +164,7 @@ class RobinhoodChainMarket:
             fee = self.registry.pool_fee(product, self.s.pool_fee_tier)
             base_decimals = entry["decimals"]
             quote_token = self.registry.quote_address
-            probe_quote_wei = to_wei(probe_weth, QUOTE_DECIMALS)
+            probe_quote_wei = to_wei(probe_quote, self.qd)
             if probe_quote_wei <= 0:
                 raise RuntimeError("Order limit rounds to zero quote units")
             # Buy leg: what this run's own order size actually receives.
@@ -173,8 +176,8 @@ class RobinhoodChainMarket:
                 entry["address"], quote_token, base_out, fee
             )
             probe_base = from_wei(base_out, base_decimals)
-            ask = from_wei(probe_quote_wei, QUOTE_DECIMALS) / probe_base
-            bid = from_wei(quote_back, QUOTE_DECIMALS) / probe_base
+            ask = from_wei(probe_quote_wei, self.qd) / probe_base
+            bid = from_wei(quote_back, self.qd) / probe_base
             if bid > ask:
                 raise RuntimeError("Sell leg exceeded buy leg; quoter is inconsistent")
             quote = Quote(
@@ -183,9 +186,9 @@ class RobinhoodChainMarket:
                 ask,
                 now,
                 base_decimals,
-                QUOTE_DECIMALS,
+                self.qd,
                 fee,
-                from_wei(probe_quote_wei, QUOTE_DECIMALS),
+                from_wei(probe_quote_wei, self.qd),
                 probe_base,
             )
             if not self.history[product]:
@@ -228,12 +231,13 @@ class FixtureMarket:
     def quote_call(self, *_args, **_kwargs):
         raise RuntimeError("The fixture market does not price on chain")
 
-    def snapshot(self, probe_weth):
+    def snapshot(self, probe_quote):
         quotes = {}
         now = time.time()
-        probe = D(probe_weth)
+        probe = D(probe_quote)
         for j, p in enumerate(self.products):
-            base = D("0.0000001") * (D(10) ** (j % 3))
+            # Memecoin prices in dollars: fractions of a cent to a few cents.
+            base = D("0.00025") * (D(10) ** (j % 3))
             # A slow drift plus a faster wobble, so realised volatility is a
             # real number the guard can adapt to rather than a constant.
             drift = 1 + 0.06 * math.sin(self.tick * 0.35 + j)
@@ -246,7 +250,7 @@ class FixtureMarket:
                 price * (1 + half),
                 now,
                 18,
-                QUOTE_DECIMALS,
+                self.s.quote_decimals,
                 int(self.s.pool_fee_tier),
                 probe,
                 probe / (price * (1 + half)),

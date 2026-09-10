@@ -3,8 +3,8 @@
 Three things happen here that did not upstream, and all three only ever remove
 options:
 
-- **Dollar limits.** Sizes are configured in dollars and converted at the
-  current ETH/USD reference every observation, so a $10 order stays a $10 order.
+- **Dollar limits.** The quote asset is USDG, so a $10 order is 10 USDG with
+  nothing to convert. The ETH/USD reference only values gas inside equity.
 - **Adaptation.** Order size shrinks as realised volatility rises, and stops
   entirely past the configured ceiling. The cooldown stretches after a losing
   streak. Neither can grow a position past the configured cap.
@@ -23,9 +23,8 @@ pool, and holding to zero is worse. The on-chain minimum output still applies.
 import math
 import time
 
-from .config import D, QUOTE_DECIMALS, from_wei, to_wei
+from .config import D, from_wei, to_wei
 from .fees import gross_fee_wei
-from .pricing import usd_to_weth
 
 
 class Veto(Exception):
@@ -52,15 +51,16 @@ class Guard:
         self.stop_file = stop_file
         self.screen = screen
 
-    # -- dollar limits, converted per observation ---------------------------
+    # -- dollar limits ------------------------------------------------------
 
     def limits(self, eth_usd):
+        """Limits in the quote asset. USDG is dollars, so these are the settings."""
         return {
             "eth_usd": D(eth_usd),
-            "order_limit": usd_to_weth(self.s.order_limit_usd, eth_usd),
-            "min_order": usd_to_weth(self.s.min_order_usd, eth_usd),
-            "loss_stop": usd_to_weth(self.s.loss_stop_usd, eth_usd),
-            "reward_deadband": usd_to_weth(self.s.reward_deadband_usd, eth_usd),
+            "order_limit": D(self.s.order_limit_usd),
+            "min_order": D(self.s.min_order_usd),
+            "loss_stop": D(self.s.loss_stop_usd),
+            "reward_deadband": D(self.s.reward_deadband_usd),
         }
 
     # -- adaptation ---------------------------------------------------------
@@ -123,7 +123,7 @@ class Guard:
                 raise Veto("Quote identity mismatch")
             if not -0.5 <= now - q.timestamp <= self.s.max_quote_age:
                 raise Veto("Stale or future quote")
-        if self.l.equity(quotes) <= D(self.l.get("initial_cash")) - limits["loss_stop"]:
+        if self.l.equity(quotes, eth_usd) <= D(self.l.get("initial_cash")) - limits["loss_stop"]:
             self.l.halt("Loss stop reached; holdings remain exposed")
             raise Veto("Loss stop reached")
 
@@ -148,6 +148,7 @@ class Guard:
         if self.l.attempts_today(now) >= self.s.daily_orders:
             raise Veto("Daily order limit")
         q = quotes[product]
+        qd = q.quote_decimals
         if q.round_trip > self.spread_limit(product, side):
             raise Veto("Round-trip cost above limit")
         if side == "SELL":
@@ -165,12 +166,12 @@ class Guard:
             elif self.l.is_blocked(product):
                 raise Veto(f"{product} is blocklisted: {self.l.block_reason(product)}")
             budget = min(order_limit, self.l.cash)
-            notional_wei = to_wei(budget, QUOTE_DECIMALS)
+            notional_wei = to_wei(budget, qd)
             fee_wei = gross_fee_wei(notional_wei, self.s.protocol_fee_bps)
             amount_in_wei = notional_wei - fee_wei
             if amount_in_wei <= 0:
                 raise Veto("Protocol fee consumes the whole budget")
-            expected_out = from_wei(amount_in_wei, QUOTE_DECIMALS) / q.ask
+            expected_out = from_wei(amount_in_wei, qd) / q.ask
             min_out_wei = to_wei(expected_out * slip, q.base_decimals)
             token_in, token_out = "QUOTE", "BASE"
         else:
@@ -182,18 +183,21 @@ class Guard:
             if amount_in_wei <= 0:
                 raise Veto("No position to sell")
             expected_quote = from_wei(amount_in_wei, q.base_decimals) * q.bid
-            notional_wei = to_wei(expected_quote, QUOTE_DECIMALS)
+            notional_wei = to_wei(expected_quote, qd)
             fee_wei = gross_fee_wei(notional_wei, self.s.protocol_fee_bps)
-            min_out_wei = to_wei(expected_quote * slip, QUOTE_DECIMALS)
+            min_out_wei = to_wei(expected_quote * slip, qd)
             token_in, token_out = "BASE", "QUOTE"
         if min_out_wei <= 0:
             raise Veto("Slippage bound rounds the minimum output to zero")
-        if notional_wei < to_wei(limits["min_order"], QUOTE_DECIMALS):
+        if notional_wei < to_wei(limits["min_order"], qd):
             raise Veto("Order notional below the configured minimum")
         gas_cost_wei = 0
         if gas_price_wei is not None:
+            from .pricing import gas_to_usd
+
             gas_cost_wei = int(gas_price_wei) * int(self.s.gas_limit)
-            if D(gas_cost_wei) > D(notional_wei) * D(self.s.max_gas_share):
+            gas_usd = gas_to_usd(gas_cost_wei, eth_usd)
+            if gas_usd > from_wei(notional_wei, qd) * D(self.s.max_gas_share):
                 raise Veto("Gas cost too large a share of the order")
         return {
             "product": product,
@@ -203,11 +207,12 @@ class Guard:
             "amount_in_wei": str(amount_in_wei),
             "min_out_wei": str(min_out_wei),
             "notional_wei": str(notional_wei),
-            "notional_usd": str(from_wei(notional_wei, QUOTE_DECIMALS) * D(eth_usd)),
+            "notional_usd": str(from_wei(notional_wei, qd)),
             "planned_fee_wei": str(fee_wei),
             "fee_bps": self.s.protocol_fee_bps,
             "fee_basis": "input" if side == "BUY" else "output",
             "base_decimals": q.base_decimals,
+            "quote_decimals": qd,
             "pool_fee": q.pool_fee,
             "eth_usd": str(D(eth_usd)),
             "size_scale": str(scale),

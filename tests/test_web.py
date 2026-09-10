@@ -35,8 +35,7 @@ def write_run(tmp_path, ticks=3):
                 "product": "PONS",
                 "mode": "paper",
                 "quote": quote().json(),
-                "equity_weth": str(ledger.cash),
-                "equity_usd": "100.00",
+                "equity_usd": str(ledger.cash),
                 "notional_usd": "10.00",
                 "screen": {"approved": True, "checks": [
                     {"name": "sellable", "passed": True, "detail": "ok"},
@@ -48,6 +47,8 @@ def write_run(tmp_path, ticks=3):
             }
         )
         ledger.commit_tick(ledger.cash, None)
+    ledger.put("eth_usd", "2500")
+    ledger.put("equity_usd", str(ledger.cash))
     (tmp_path / "events.jsonl").write_text(
         "".join(json.dumps(r) + "\n" for r in rows)
     )

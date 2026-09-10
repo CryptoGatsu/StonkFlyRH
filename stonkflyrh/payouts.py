@@ -12,7 +12,7 @@ is never re-sent blindly.
 import time
 
 from .chain import checksum, hex32
-from .config import D, QUOTE_DECIMALS, from_wei, to_wei
+from .config import D, from_wei, to_wei
 from .fees import BENEFICIARY, fee_wallet
 
 
@@ -67,16 +67,17 @@ class FeeSweeper:
                 )
             self.fees.mark_payout(row["id"], "SENT" if int(r["status"]) == 1 else "REJECTED")
 
-    def sweep(self, minimum_weth=None, dry_run=False):
+    def sweep(self, minimum=None, dry_run=False):
         self.reconcile()
-        floor = to_wei(minimum_weth if minimum_weth is not None else "0.0001", QUOTE_DECIMALS)
+        qd = self.registry.quote_decimals
+        floor = to_wei(minimum if minimum is not None else "1", qd)
         held = int(self.token.functions.balanceOf(self.address).call())
         owed = self.fees.outstanding()
         row = {
             "beneficiary": BENEFICIARY,
             "destination": self.destination(),
             "outstanding_wei": owed,
-            "outstanding": str(from_wei(owed, QUOTE_DECIMALS)),
+            "outstanding": str(from_wei(owed, qd)),
         }
         if owed < floor:
             row["status"] = "BELOW_THRESHOLD"

@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 from .chain import FACTORY_ABI, QUOTER_ABI, ROUTER_ABI, ZERO_ADDRESS, checksum
-from .config import QUOTE_SYMBOL, SYMBOL
+from .config import SYMBOL
 
 REGISTRY_ENV = "STONKFLYRH_TOKENS"
 DEFAULT_REGISTRY = "tokens.json"
@@ -30,30 +30,25 @@ class Registry:
         if not isinstance(section, dict):
             raise RuntimeError(f"Registry has no '{network_key}' section")
         quote = section.get("quote") or {}
-        if quote.get("symbol") != QUOTE_SYMBOL or int(quote.get("decimals", 0)) != 18:
-            raise RuntimeError(f"Registry quote asset must be {QUOTE_SYMBOL} with 18 decimals")
+        if not SYMBOL.match(quote.get("symbol", "")) or not 0 <= int(quote.get("decimals", -1)) <= 36:
+            raise RuntimeError("Registry quote asset needs a symbol, address and decimals")
+        self.quote_symbol = quote["symbol"]
         self.quote_address = checksum(quote["address"])
-        self.quote_decimals = 18
+        self.quote_decimals = int(quote["decimals"])
         self.router = checksum(section["router"])
         self.quoter = checksum(section["quoter"])
-        # Optional: a Chainlink ETH/USD aggregator, or a stablecoin to price
-        # against through the quoter. One of them is needed for dollar limits.
+        # Gas is valued through one of these: wrapped ETH priced into the quote
+        # pool by the run's own quoter, or a Chainlink ETH/USD aggregator.
         self.eth_usd_feed = (
             checksum(section["eth_usd_feed"]) if section.get("eth_usd_feed") else None
         )
-        self.stable = None
-        if section.get("stable"):
-            stable = dict(section["stable"])
-            if not SYMBOL.match(stable.get("symbol", "")):
-                raise RuntimeError("Invalid stablecoin symbol in registry")
-            stable["address"] = checksum(stable["address"])
-            stable["decimals"] = int(stable["decimals"])
-            if not 0 < stable["decimals"] <= 36:
-                raise RuntimeError("Implausible stablecoin decimals")
-            self.stable = stable
+        self.weth = checksum(section["weth"]) if section.get("weth") else None
+        self.weth_pool_fee = int(section.get("weth_pool_fee", 500))
+        if self.weth and self.weth == self.quote_address:
+            raise RuntimeError("weth cannot be the quote asset")
         self.tokens = {}
         for symbol, info in (section.get("tokens") or {}).items():
-            if not SYMBOL.match(symbol) or symbol == QUOTE_SYMBOL:
+            if not SYMBOL.match(symbol) or symbol == self.quote_symbol:
                 raise RuntimeError("Invalid registry symbol: " + str(symbol))
             decimals = int(info["decimals"])
             if not 0 <= decimals <= 36:
@@ -65,8 +60,8 @@ class Registry:
             }
             if "pool_fee" in info:
                 entry["pool_fee"] = int(info["pool_fee"])
-            if entry["address"] == self.quote_address:
-                raise RuntimeError("A memecoin entry cannot be the quote asset")
+            if entry["address"] in (self.quote_address, self.weth):
+                raise RuntimeError("A memecoin entry cannot be the quote asset or WETH")
             self.tokens[symbol] = entry
         if len(set(t["address"] for t in self.tokens.values())) != len(self.tokens):
             raise RuntimeError("Duplicate token address in registry")
@@ -94,8 +89,11 @@ class Registry:
         client.require_code(self.router, "Router")
         client.require_code(self.quoter, "Quoter")
         quote = client.token_identity(self.quote_address)
-        if quote["symbol"] != QUOTE_SYMBOL or quote["decimals"] != 18:
-            raise RuntimeError("Configured quote address is not 18-decimal WETH")
+        if quote["symbol"] != self.quote_symbol or quote["decimals"] != self.quote_decimals:
+            raise RuntimeError(
+                f"On-chain quote token is {quote['symbol']}/{quote['decimals']}, "
+                f"not {self.quote_symbol}/{self.quote_decimals}"
+            )
         router = client.contract(self.router, ROUTER_ABI)
         quoter = client.contract(self.quoter, QUOTER_ABI)
         try:
@@ -124,24 +122,36 @@ class Registry:
                 ).call()
             )
             if pool == ZERO_ADDRESS or not client.has_code(pool):
-                raise RuntimeError(f"No {symbol}/{QUOTE_SYMBOL} pool at fee tier {fee}")
+                raise RuntimeError(f"No {symbol}/{self.quote_symbol} pool at fee tier {fee}")
             pools[symbol] = {"pool": pool, "fee": fee}
         reference = None
         if self.eth_usd_feed:
             client.require_code(self.eth_usd_feed, "ETH/USD feed")
             reference = {"kind": "chainlink", "address": self.eth_usd_feed}
-        elif self.stable:
-            identity = client.token_identity(self.stable["address"])
-            if (
-                identity["symbol"] != self.stable["symbol"]
-                or identity["decimals"] != self.stable["decimals"]
-            ):
-                raise RuntimeError("Registry stablecoin does not match the chain")
-            reference = {"kind": "stable-pool", **self.stable}
+        elif self.weth:
+            identity = client.token_identity(self.weth)
+            if identity["decimals"] != 18:
+                raise RuntimeError("Registry weth is not an 18-decimal token")
+            pool = checksum(
+                factory_contract.functions.getPool(
+                    self.weth, self.quote_address, self.weth_pool_fee
+                ).call()
+            )
+            if pool == ZERO_ADDRESS or not client.has_code(pool):
+                raise RuntimeError(
+                    f"No WETH/{self.quote_symbol} pool at fee tier {self.weth_pool_fee}"
+                )
+            reference = {
+                "kind": "weth-quote-pool",
+                "weth": self.weth,
+                "symbol": identity["symbol"],
+                "pool": pool,
+                "fee": self.weth_pool_fee,
+            }
         else:
             raise RuntimeError(
-                "Registry needs 'eth_usd_feed' or 'stable': dollar limits cannot "
-                "be sized without an ETH/USD reference"
+                "Registry needs 'weth' or 'eth_usd_feed': gas cannot be valued "
+                "without an ETH/USD reference"
             )
         return {
             "network": self.network_key,

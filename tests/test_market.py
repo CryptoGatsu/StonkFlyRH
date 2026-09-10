@@ -7,7 +7,7 @@ from stonkflyrh.config import D, QUOTE_DECIMALS, Settings, to_wei
 from stonkflyrh.display import market_frame, tick_label
 from stonkflyrh.market import FixtureMarket, Quote, RobinhoodChainMarket, tick_to_price
 
-PROBE = D("0.004")
+PROBE = D("10")
 WETH = "0x" + "11" * 20
 TOKEN = "0x" + "22" * 20
 POOL = "0x" + "33" * 20
@@ -43,11 +43,11 @@ class Contract:
 
 
 class FakeChain:
-    """A constant-price pool: one unit of WETH always buys `rate` tokens."""
+    """A constant-price pool: one unit of USDG always buys `rate` tokens."""
 
     net = type("Net", (), {"name": "Robinhood Chain", "chain_id": 4663})()
 
-    def __init__(self, rate=D("10000000"), pool_fee=D("0.01"), token0=TOKEN, observations=None):
+    def __init__(self, rate=D("4000"), pool_fee=D("0.01"), token0=TOKEN, observations=None):
         self.rate = rate
         self.pool_fee = pool_fee
         self.token0 = token0
@@ -62,9 +62,10 @@ class FakeChain:
     def quote(self, params):
         token_in, token_out, amount_in, _fee, _limit = params
         net = D(amount_in) * (1 - self.pool_fee)
+        scale = D(10) ** 12  # 6-decimal USDG against an 18-decimal memecoin
         if token_in.lower() == WETH.lower():
-            return [int(net * self.rate), 0, 0, 0]
-        return [int(net / self.rate), 0, 0, 0]
+            return [int(net * self.rate * scale), 0, 0, 0]
+        return [int(net / self.rate / scale), 0, 0, 0]
 
     def observe(self, seconds_agos):
         if self.observations is None:
@@ -74,6 +75,7 @@ class FakeChain:
 
 class FakeRegistry:
     quote_address = WETH
+    quote_decimals = 6
     quoter = "0x" + "44" * 20
     router = "0x" + "55" * 20
 
@@ -104,9 +106,9 @@ def test_quote_rejects_nonpositive_prices(bad):
         Quote("PONS", bad, D("1"), 0.0, 18, QUOTE_DECIMALS, 10000, D("1"), D("1"))
 
 
-def test_quote_rejects_a_non_weth_quote_asset():
+def test_quote_rejects_implausible_quote_decimals():
     with pytest.raises(ValueError):
-        Quote("PONS", D("1"), D("1"), 0.0, 18, 6, 10000, D("1"), D("1"))
+        Quote("PONS", D("1"), D("1"), 0.0, 18, 99, 10000, D("1"), D("1"))
 
 
 # -- on-chain quoting ------------------------------------------------------
@@ -163,8 +165,8 @@ def test_record_keeps_a_bounded_history():
 
 
 def test_tick_to_price_inverts_with_token_order():
-    a = tick_to_price(0, 18, base_is_token0=True)
-    b = tick_to_price(0, 18, base_is_token0=False)
+    a = tick_to_price(0, 18, base_is_token0=True, quote_decimals=18)
+    b = tick_to_price(0, 18, base_is_token0=False, quote_decimals=18)
     assert a == pytest.approx(float(b))
     assert tick_to_price(10000, 18, True) > tick_to_price(0, 18, True)
     assert tick_to_price(10000, 18, False) < tick_to_price(0, 18, False)
@@ -174,6 +176,8 @@ def test_tick_to_price_scales_with_decimals():
     six = tick_to_price(0, 6, base_is_token0=True)
     eighteen = tick_to_price(0, 18, base_is_token0=True)
     assert six < eighteen
+    # An 18-decimal memecoin as token0 against 6-decimal USDG at tick 0.
+    assert tick_to_price(0, 18, True, 6) == D(10) ** 12
 
 
 # -- fixtures --------------------------------------------------------------

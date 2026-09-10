@@ -210,9 +210,7 @@ def cmd_screen(a):
     oracle = build_oracle(client, registry, market)
     eth_usd = oracle.eth_usd()
     a.out.mkdir(parents=True, exist_ok=True)
-    ledger = Ledger(
-        a.out / "screen.sqlite", settings, "screen", capital_weth=D("1")
-    )
+    ledger = Ledger(a.out / "screen.sqlite", settings, "screen", capital=D("1"))
     try:
         screen = RugScreen(settings, client, registry, ledger, market.quote_call)
         report = {
@@ -341,7 +339,6 @@ def cmd_run(a, parser):
     from .ledger import Ledger
     from .market import FixtureMarket, RobinhoodChainMarket
     from .pricing import build as build_oracle
-    from .pricing import usd_to_weth
     from .wallet import address as wallet_address
 
     client = registry = verified = None
@@ -349,6 +346,15 @@ def cmd_run(a, parser):
         _, client, registry, verified = chain_context(
             net.key, a.tokens, settings.products, settings.pool_fee_tier
         )
+        if (registry.quote_symbol, registry.quote_decimals) != (
+            settings.quote_symbol,
+            settings.quote_decimals,
+        ):
+            settings = dataclasses.replace(
+                settings,
+                quote_symbol=registry.quote_symbol,
+                quote_decimals=registry.quote_decimals,
+            )
     market = (
         FixtureMarket(settings)
         if a.fixture
@@ -360,7 +366,7 @@ def cmd_run(a, parser):
         out / "ledger.sqlite",
         settings,
         "live" if a.live else "paper",
-        capital_weth=usd_to_weth(settings.capital_usd, eth_usd),
+        capital=D(settings.capital_usd),
     )
     try:
         if a.live:
@@ -420,7 +426,6 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
     from .display import market_frame
     from .fees import fee_wallet
     from .neural.controller import FlyController
-    from .pricing import weth_to_usd
     from .reinforcement import reinforcement
     from .risk import Guard, Veto
     from .safety import RugScreen, RugWatch
@@ -508,8 +513,8 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         market.record(quotes)
         product = settings.products[ledger.get("tick") % len(settings.products)]
         q = quotes[product]
-        equity = ledger.equity(quotes)
-        ledger.put("equity_usd", str(weth_to_usd(equity, eth_usd)))
+        equity = ledger.equity(quotes, eth_usd)
+        ledger.put("equity_usd", str(equity))
 
         # A rug is checked before reinforcement so its longer aversive pulse
         # replaces, rather than follows, this observation's ordinary loss pulse.
@@ -523,7 +528,9 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             0 if kind == "reward" else int(ledger.get("loss_streak") or 0) + (kind == "aversive"),
         )
 
-        frame = market_frame(product, market.history[product], q.bid, q.ask)
+        frame = market_frame(
+            product, market.history[product], q.bid, q.ask, settings.quote_symbol
+        )
         neural = controller.observe(frame, kind, pulse_ms=pulse_ms)
         slot = ledger.get("tick") % 2
         checkpoint = out / f"brain-{slot}.npz"
@@ -536,7 +543,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             "neural": neural,
             "product": product,
             "quote": q.json(),
-            "pnl_delta_weth": str(delta),
+            "pnl_delta_usd": str(delta),
             "market_history": market.history,
             "fixture_tick": getattr(market, "tick", None),
         }
@@ -574,12 +581,12 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             "product": product,
             "mode": broker.mode,
             "network": net.key,
-            "quote": q.json(),
             "eth_usd": str(eth_usd),
-            "equity_weth": str(equity),
-            "equity_usd": str(weth_to_usd(equity, eth_usd)),
-            "notional_usd": str(weth_to_usd(limits["order_limit"], eth_usd)),
-            "pnl_delta_weth": str(delta),
+            "quote": q.json(),
+            "quote_symbol": settings.quote_symbol,
+            "equity_usd": str(equity),
+            "notional_usd": str(limits["order_limit"]),
+            "pnl_delta_usd": str(delta),
             "size_scale": str(guard.size_scale(market.history[product])[0])
             if settings.adapt_enabled
             else "1",

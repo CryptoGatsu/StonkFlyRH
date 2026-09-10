@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 
 from .chain import ERC20_ABI, OWNABLE_ABI, ZERO_ADDRESS, checksum
-from .config import D, QUOTE_DECIMALS, from_wei, to_wei
+from .config import D, from_wei, to_wei
 
 POOL_STATE_ABI = [
     {
@@ -289,13 +289,14 @@ class RugScreen:
         fee = self.registry.pool_fee(product, self.s.pool_fee_tier)
         decimals = entry["decimals"]
 
-        weth_in_pool = int(
+        qd = self.registry.quote_decimals
+        quote_in_pool = int(
             self.client.contract(quote_token, ERC20_ABI).functions.balanceOf(pool).call()
         )
-        # Both sides of a pool are worth about the same, so twice the WETH leg
-        # approximates its depth. Concentrated liquidity makes this a floor, not
-        # an exact TVL, which is the safe direction for a minimum.
-        liquidity_usd = from_wei(weth_in_pool, QUOTE_DECIMALS) * D(eth_usd) * 2
+        # Both sides of a pool are worth about the same, so twice the USDG leg
+        # approximates its depth in dollars. Concentrated liquidity makes this a
+        # floor, not an exact TVL, which is the safe direction for a minimum.
+        liquidity_usd = from_wei(quote_in_pool, qd) * 2
         floor = self.min_liquidity_usd()
         checks.append(
             Check(
@@ -318,7 +319,7 @@ class RugScreen:
             )
         )
 
-        order_probe = to_wei(self.order_probe_weth(eth_usd), QUOTE_DECIMALS)
+        order_probe = to_wei(self.s.order_limit_usd, qd)
         small_probe = max(1, order_probe // self.SMALL_PROBE_DIVISOR)
         small = self._round_trip(entry["address"], quote_token, small_probe, fee, decimals)
         if small is None:
@@ -360,13 +361,8 @@ class RugScreen:
         )
         return checks
 
-    def order_probe_weth(self, eth_usd):
-        from .pricing import usd_to_weth
-
-        return usd_to_weth(self.s.order_limit_usd, eth_usd)
-
     def _round_trip(self, base, quote, probe_wei, fee, decimals):
-        """Fraction lost buying and immediately selling `probe_wei` of WETH."""
+        """Fraction lost buying and immediately selling `probe_wei` of USDG."""
         try:
             base_out = self.quote_call(quote, base, probe_wei, fee)
             quote_back = self.quote_call(base, quote, base_out, fee)

@@ -6,401 +6,621 @@
 <title>StonkFlyRH</title>
 <meta name="description" content="Live trades from a fly-connectome bot on Robinhood Chain.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Archivo:wght@700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
 <style>
   :root {
-    --bg: #080b12; --panel: #0e131d; --raise: #131a27; --line: #1c2536; --ink: #e6ecf7;
-    --muted: #7d8ba4; --buy: #35d69b; --sell: #ff5f7a; --hold: #6b7a95;
-    --accent: #6ea8ff; --warn: #ffc44d; --bad: #ff5f7a;
-    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --bg: #0a0a0c; --panel: #101013; --raise: #16161a; --line: #2a2a31; --line-soft: #1c1c22;
+    --ink: #f1f1ee; --muted: #8b8b93; --dim: #55555d;
+    --lime: #c8ff00; --lime-ink: #0a0a0c; --pink: #ff4d7a; --cyan: #5ff2e6; --amber: #ffb347;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --pixel: "Silkscreen", "JetBrains Mono", monospace;
   }
   * { box-sizing: border-box; }
+  html, body { background: var(--bg); }
   body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font: 14px/1.5 var(--mono); -webkit-font-smoothing: antialiased;
+    margin: 0; color: var(--ink); font: 13px/1.5 var(--mono);
+    background-color: var(--bg);
+    background-image: radial-gradient(var(--line-soft) 1px, transparent 1px);
+    background-size: 18px 18px;
+    -webkit-font-smoothing: antialiased;
   }
-  a { color: var(--accent); }
-  .wrap { max-width: 1240px; margin: 0 auto; padding: 20px 16px 56px; }
-  header {
-    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
-    padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 20px;
+  a { color: var(--lime); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 0 18px 70px; }
+
+  /* top rule with the lime block, like a window chrome strip */
+  .topbar { height: 6px; background: var(--line); position: relative; margin-bottom: 22px; }
+  .topbar::after { content: ""; position: absolute; right: 0; top: 0; width: 84px; height: 6px; background: var(--lime); }
+
+  .label { font: 700 10px/1 var(--pixel); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .label.ink { color: var(--ink); }
+  .cols { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: 36px; align-items: start; }
+  @media (max-width: 980px) { .cols { grid-template-columns: 1fr; } }
+  .stack { display: grid; gap: 22px; min-width: 0; }
+
+  /* boxes: hard edges, hard shadow */
+  .box { background: var(--panel); border: 1px solid var(--line); box-shadow: 5px 5px 0 #000; min-width: 0; }
+  .box.ink { background: var(--ink); color: var(--bg); }
+
+  /* FLY.EXE window */
+  .win-title { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--ink); color: var(--bg); }
+  .win-title .sq { width: 9px; height: 9px; background: var(--bg); display: inline-block; }
+  .win-title .name { font: 700 12px/1 var(--pixel); letter-spacing: .12em; }
+  .win-title .spacer { flex: 1; }
+  button.chip {
+    font: 700 9px/1 var(--pixel); letter-spacing: .1em; text-transform: uppercase; cursor: pointer;
+    background: var(--ink); color: var(--bg); border: 1px solid var(--bg); padding: 6px 9px;
+    box-shadow: 2px 2px 0 var(--bg);
   }
-  h1 { font: 700 20px/1 var(--display); margin: 0; letter-spacing: -.01em; }
-  h1 span { color: var(--muted); font: 400 13px/1 var(--mono); margin-left: 8px; }
-  .banner {
-    display: none; margin: -4px 0 16px; padding: 10px 14px; border-radius: 8px;
-    background: #16213a; border: 1px solid #24355c; color: #b9c8ea; font-size: 12px;
-  }
-  .banner[data-on] { display: block; }
-  .banner b { color: var(--ink); font-weight: 500; }
-  td, .v, .rows b { font-variant-numeric: tabular-nums; }
-  @media (prefers-reduced-motion: reduce) { tr.fresh td { animation: none; } }
-  .tag {
-    font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-    padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted);
-  }
-  .tag.live { color: var(--warn); border-color: #4a3a12; background: #241b06; }
-  .tag.paper { color: var(--buy); border-color: #14402f; background: #08201a; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--hold);
-         display: inline-block; margin-right: 6px; }
-  .dot.on { background: var(--buy); box-shadow: 0 0 8px var(--buy); }
-  .spacer { flex: 1 1 auto; }
-  .grid { display: grid; gap: 14px; }
-  .stats { grid-template-columns: repeat(auto-fit, minmax(146px, 1fr)); margin-bottom: 20px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-          padding: 14px 16px; }
-  .k { color: var(--muted); font-size: 11px; letter-spacing: .09em; text-transform: uppercase; }
-  .v { font-size: 20px; margin-top: 6px; word-break: break-all; }
-  .v small { font-size: 12px; color: var(--muted); }
-  .v.bad { color: var(--bad); }
-  .cols { grid-template-columns: 1.5fr 1fr; align-items: start; }
-  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
-  h2 { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
-       margin: 0 0 12px; display: flex; justify-content: space-between; gap: 10px; }
-  h2 em { font-style: normal; color: var(--muted); opacity: .8; }
+  button.chip:hover, button.chip:focus-visible { background: var(--lime); outline: none; }
+  .scene { position: relative; aspect-ratio: 16 / 11; background: #0d0a18; overflow: hidden; }
+  .scene canvas { width: 100% !important; height: 100% !important; display: block; image-rendering: pixelated; image-rendering: crisp-edges; cursor: grab; }
+  .scene canvas:active { cursor: grabbing; }
+  .scene .corner { position: absolute; right: 12px; bottom: 12px; background: var(--ink); color: var(--bg);
+                   font: 700 9px/1 var(--pixel); letter-spacing: .1em; padding: 6px 9px; }
+  .scene .corner b { color: #5a7a00; margin-left: 8px; }
+
+  /* neural strip */
+  .strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .strip > div { padding: 14px 16px; border-left: 1px solid var(--line); min-width: 0; }
+  .strip > div:first-child { border-left: 0; }
+  .strip .val { font: 700 20px/1.1 var(--pixel); color: var(--lime); margin-top: 8px; word-break: break-all; }
+  .strip > div:first-child .val { color: var(--ink); }
+  @media (max-width: 560px) { .strip { grid-template-columns: repeat(2, 1fr); } .strip > div:nth-child(3) { border-left: 0; } }
+
+  /* neural order callout */
+  .order { border-left: 4px solid var(--lime); padding: 16px 20px; }
+  .order .big { font: 700 26px/1 var(--pixel); color: var(--lime); margin: 10px 0 10px; display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
+  .order .big small { font: 400 13px/1.4 var(--mono); color: var(--ink); }
+  .order .big.SELL { color: var(--pink); }
+  .order .big.HOLD { color: var(--muted); }
+  .order .sub { color: var(--muted); font-size: 12px; }
+
+  /* THE BAG */
+  .bag { padding: 18px 22px 8px; }
+  .bag h2 { margin: 0 0 14px; font: 700 13px/1 var(--pixel); letter-spacing: .14em; }
+  .rule { border: 0; border-top: 1px dashed var(--line); margin: 14px 0; }
+  .total { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .money { font: 700 clamp(38px, 5vw, 60px)/1 var(--pixel); color: var(--ink); letter-spacing: .02em; margin: 12px 0 8px; font-variant-numeric: tabular-nums; }
+  .money .cents { font-size: .55em; color: var(--muted); }
+  .money.bad { color: var(--pink); }
+  .pnl { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .pnl .val { font: 500 14px/1 var(--mono); }
+  .pnl .val.up { color: var(--lime); } .pnl .val.down { color: var(--pink); }
+  .pnl .feed { color: var(--muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+  .pnl .feed.warn { color: var(--amber); }
+
+  .row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 6px 0 12px; }
+  .row-head .right { color: var(--muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+  .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 560px) { .cards { grid-template-columns: 1fr; } }
+  .card { border: 1px solid var(--line); background: var(--raise); padding: 14px 16px; min-width: 0; }
+  .card.watch { border-color: var(--lime); }
+  .card .top { display: flex; gap: 10px; align-items: center; }
+  .card .tile { width: 32px; height: 32px; display: grid; place-items: center; font: 700 14px/1 var(--pixel); color: var(--bg); flex: 0 0 auto; }
+  .card .sym { font: 700 11px/1 var(--pixel); letter-spacing: .1em; }
+  .card .price { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .card .watching { margin-left: auto; font: 700 8px/1 var(--pixel); letter-spacing: .1em; color: var(--lime); }
+  .card .mid { display: flex; justify-content: space-between; align-items: baseline; margin-top: 12px; gap: 8px; }
+  .card .mid .v { font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .card .mid .d { font-size: 11px; color: var(--muted); }
+  .card .mid .d.up { color: var(--lime); } .card .mid .d.down { color: var(--pink); }
+  .card .bot { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 6px; gap: 8px; }
+  .card .bot span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .tabs { display: flex; gap: 6px; align-items: center; margin: 14px 0 6px; flex-wrap: wrap; }
+  .tab { font: 700 10px/1 var(--pixel); letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+         background: none; border: 1px solid transparent; padding: 12px 14px; cursor: pointer; }
+  .tab[aria-selected="true"] { background: var(--lime); color: var(--lime-ink); border-color: var(--lime); box-shadow: 4px 4px 0 #000; }
+  .tab:hover:not([aria-selected="true"]) { color: var(--ink); }
+  .tab:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+  .tabs .obs { margin-left: auto; color: var(--muted); font-size: 11px; letter-spacing: .06em; }
   .scroll { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 660px; }
-  th { text-align: left; color: var(--muted); font-weight: 400; font-size: 11px;
-       letter-spacing: .08em; text-transform: uppercase; padding: 0 10px 8px 0; }
-  td { padding: 7px 10px 7px 0; border-top: 1px solid var(--line); white-space: nowrap; }
-  tr.fresh td { animation: flash 1.1s ease-out; }
-  @keyframes flash { from { background: #17233a; } to { background: transparent; } }
-  .side { font-weight: 600; }
-  .BUY { color: var(--buy); } .SELL { color: var(--sell); } .HOLD { color: var(--hold); }
-  .pill { font-size: 11px; padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line);
-          color: var(--muted); white-space: nowrap; }
-  .pill.ok { color: var(--buy); border-color: #14402f; }
-  .pill.no { color: var(--sell); border-color: #451a24; }
-  .pill.warn { color: var(--warn); border-color: #4a3a12; }
-  .rows > div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0;
-                border-top: 1px solid var(--line); }
-  .rows > div:first-child { border-top: 0; }
-  .rows b { font-weight: 500; }
-  .addr { font-size: 11px; color: var(--muted); word-break: break-all; margin-top: 4px; }
-  .checks { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
-  .screenblock { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
-  .screenblock:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
-  .why { color: var(--muted); font-size: 12px; margin-top: 4px; }
-  .post { border-top: 1px solid var(--line); padding: 10px 0; }
-  .post:first-child { border-top: 0; padding-top: 0; }
-  .post p { margin: 0; white-space: pre-wrap; font-size: 13px; }
-  .post .meta { color: var(--muted); font-size: 11px; margin-top: 6px;
-                display: flex; gap: 8px; align-items: center; }
-  img.frame { width: 100%; border-radius: 8px; border: 1px solid var(--line);
-              display: block; image-rendering: pixelated; }
-  footer { margin-top: 26px; color: var(--muted); font-size: 12px; line-height: 1.7; }
-  .empty { color: var(--muted); padding: 14px 0; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 560px; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font: 700 9px/1 var(--pixel); letter-spacing: .12em; color: var(--muted); padding: 10px 8px 12px 0; border-bottom: 1px solid var(--line); }
+  th.r, td.r { text-align: right; padding-right: 0; }
+  td { padding: 14px 8px 14px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; white-space: nowrap; }
+  td .k { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
+  tr.fresh td { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: #1b2a00; } to { background: transparent; } }
+  .side { font: 700 11px/1 var(--pixel); letter-spacing: .1em; }
+  .BUY { color: var(--lime); } .SELL { color: var(--pink); } .HOLD { color: var(--muted); }
+  .pill { font: 700 8px/1 var(--pixel); letter-spacing: .1em; padding: 5px 7px; border: 1px solid var(--line); color: var(--muted); display: inline-block; }
+  .pill.ok { color: var(--lime); border-color: #4a5e00; } .pill.no { color: var(--pink); border-color: #5b1f2d; } .pill.warn { color: var(--amber); border-color: #5a3d10; }
+  .empty { color: var(--muted); padding: 22px 0; font-size: 12px; }
+  .pane[hidden] { display: none; }
+
+  /* screen pane */
+  .verdict { border-top: 1px solid var(--line-soft); padding: 14px 0; }
+  .verdict:first-child { border-top: 0; }
+  .verdict .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .verdict .head b { font: 700 11px/1 var(--pixel); letter-spacing: .1em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .why { color: var(--muted); font-size: 11px; margin-top: 8px; line-height: 1.6; }
+
+  /* posts pane */
+  .post { border-top: 1px solid var(--line-soft); padding: 14px 0; }
+  .post:first-child { border-top: 0; }
+  .post p { margin: 0; white-space: pre-wrap; font-size: 12px; }
+  .post .meta { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 11px; margin-top: 8px; }
+
+  /* collapsible */
+  details { border-top: 1px dashed var(--line); margin-top: 8px; }
+  summary { list-style: none; display: flex; justify-content: space-between; align-items: center; padding: 16px 0; cursor: pointer; }
+  summary::-webkit-details-marker { display: none; }
+  summary .plus { font: 700 16px/1 var(--pixel); color: var(--lime); }
+  details[open] summary .plus { transform: rotate(45deg); }
+  .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 22px; padding: 0 0 18px; }
+  .kv div { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line-soft); padding: 7px 0; font-size: 12px; }
+  .kv span { color: var(--muted); } .kv b { font-weight: 500; text-align: right; word-break: break-all; }
+  .addr { font-size: 11px; color: var(--muted); word-break: break-all; }
+
+  .banner { display: none; margin-bottom: 18px; padding: 10px 14px; border: 1px solid var(--line); background: var(--panel);
+            color: var(--muted); font-size: 12px; box-shadow: 4px 4px 0 #000; }
+  .banner[data-on] { display: block; } .banner b { color: var(--ink); font-weight: 500; }
+
+  footer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; justify-content: space-between; align-items: center; gap: 14px;
+           padding: 10px 18px; background: var(--bg); border-top: 1px solid var(--line);
+           font: 700 9px/1 var(--pixel); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  footer .sq { width: 8px; height: 8px; display: inline-block; background: var(--dim); margin-right: 8px; vertical-align: middle; }
+  footer .sq.on { background: var(--lime); box-shadow: 0 0 8px var(--lime); }
+  footer .live { color: var(--ink); }
+  @media (max-width: 560px) { footer .mid { display: none; } }
+  @media (prefers-reduced-motion: reduce) { tr.fresh td { animation: none; } }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <h1>StonkFlyRH <span>· live trades</span></h1>
-    <span class="tag" id="mode">…</span>
-    <span class="tag" id="network">…</span>
-    <span class="tag" id="source">…</span>
-    <span class="tag" id="ethusd">ETH …</span>
-    <span class="spacer"></span>
-    <span class="tag"><i class="dot" id="dot"></i><span id="conn">connecting</span></span>
-  </header>
-
+  <div class="topbar"></div>
   <div class="banner" id="banner"></div>
 
-  <div class="grid stats">
-    <div class="card"><div class="k">Equity</div><div class="v" id="equity">—</div></div>
-    <div class="card"><div class="k">Cash</div><div class="v" id="cash">—</div></div>
-    <div class="card"><div class="k">Trade limit</div><div class="v" id="limit">—</div></div>
-    <div class="card"><div class="k">Ticks</div><div class="v" id="tick">—</div></div>
-    <div class="card"><div class="k">Rugs avoided</div><div class="v" id="avoided">—</div></div>
-    <div class="card"><div class="k">Rugs taken</div><div class="v" id="rugs">—</div></div>
-  </div>
-
-  <div class="grid cols">
-    <div class="grid">
-      <section class="card">
-        <h2>Trade feed</h2>
-        <div class="scroll">
-          <table>
-            <thead><tr>
-              <th>Tick</th><th>Time</th><th>Pair</th><th>Signal</th>
-              <th>Size</th><th>Bid</th><th>Ask</th><th>Screen</th><th>Execution</th>
-            </tr></thead>
-            <tbody id="feed"></tbody>
-          </table>
+  <div class="cols">
+    <!-- ================= LEFT ================= -->
+    <div class="stack">
+      <section class="box" aria-label="Fly scene">
+        <div class="win-title">
+          <span class="sq"></span><span class="name">FLY.EXE</span>
+          <span class="spacer"></span>
+          <button class="chip" id="motion" type="button">Pause motion</button>
         </div>
-        <div class="empty" id="feed-empty">Waiting for the worker to write its first tick…</div>
+        <div class="scene" id="scene">
+          <div class="corner">DRAG TO ORBIT<b>+</b></div>
+        </div>
       </section>
 
-      <section class="card">
-        <h2>Rug screen <em id="tightening"></em></h2>
-        <div id="screens"><div class="empty">No token has been screened yet.</div></div>
+      <section class="box strip" aria-label="Neural stats">
+        <div><div class="label">Neurons</div><div class="val">166,700</div></div>
+        <div><div class="label">Latest spikes</div><div class="val" id="n-spikes">—</div></div>
+        <div><div class="label">Memory changed</div><div class="val" id="n-mem">—</div></div>
+        <div><div class="label">Brain time</div><div class="val" id="n-time">—</div></div>
+      </section>
+
+      <section class="box order" aria-label="Neural order">
+        <div class="label">Neural order</div>
+        <div class="big HOLD" id="o-big"><span id="o-side">—</span><small id="o-status"></small></div>
+        <div class="sub" id="o-sub">Waiting for the first observation.</div>
       </section>
     </div>
 
-    <div class="grid">
-      <section class="card">
-        <h2>Posts to X</h2>
-        <div id="posts"><div class="empty">Nothing posted yet.</div></div>
-      </section>
-
-      <section class="card">
-        <h2>Positions</h2>
-        <div class="rows" id="positions"><div><span>Flat</span><b>—</b></div></div>
-      </section>
-
-      <section class="card" id="block-card" hidden>
-        <h2>Blocklist</h2>
-        <div class="rows" id="blocklist"></div>
-      </section>
-
-      <section class="card">
-        <h2>Neural input</h2>
-        <img class="frame" id="frame" alt="Latest chart rendered into the connectome"
-             src="/latest-input.png"
-             onerror="this.removeAttribute('onerror'); if (window.STONKFLY_PREVIEW) this.src = window.STONKFLY_PREVIEW.frame;">
-        <div class="rows" style="margin-top:10px">
-          <div><span>Decoder Δ (Hz)</span><b id="n-diff">—</b></div>
-          <div><span>Gate spikes</span><b id="n-gate">—</b></div>
-          <div><span>Stimulus</span><b id="n-stim">—</b></div>
-          <div><span>Plastic edges changed</span><b id="n-mem">—</b></div>
-          <div><span>Size scale</span><b id="n-scale">—</b></div>
+    <!-- ================= RIGHT ================= -->
+    <div class="stack">
+      <section class="box bag" aria-label="The bag">
+        <h2>THE BAG</h2>
+        <hr class="rule">
+        <div class="total"><span class="label">Total value</span><span class="label" id="quote-sym" style="color:var(--cyan)">USDG</span></div>
+        <div class="money" id="equity">—</div>
+        <div class="pnl">
+          <span><span class="label">Net P&amp;L</span>&nbsp;&nbsp;<span class="val" id="pnl">—</span></span>
+          <span class="feed" id="feed-age">—</span>
         </div>
-      </section>
+        <hr class="rule">
 
-      <section class="card">
-        <h2>Wallets</h2>
-        <div class="k">Fly wallet</div>
-        <div class="addr" id="w-fly">not imported</div>
-        <div class="k" style="margin-top:10px">Fee wallet</div>
-        <div class="addr" id="w-fee">not configured</div>
-        <div class="rows" style="margin-top:10px">
-          <div><span>Fees booked</span><b id="f-gross">—</b></div>
+        <div class="row-head"><span class="label ink">Currently holding</span><span class="right" id="invested">—</span></div>
+        <div class="cards" id="cards"></div>
+
+        <hr class="rule">
+        <div class="row-head"><span class="label ink" style="font-size:11px">Live prices</span><a class="label" id="audit" href="/api/state" target="_blank" rel="noopener" style="color:var(--lime)">Audit ↗</a></div>
+        <div class="tabs" role="tablist">
+          <button class="tab" role="tab" aria-selected="true" data-pane="trades" id="tab-trades">Trades <span id="n-trades">0</span></button>
+          <button class="tab" role="tab" aria-selected="false" data-pane="decisions">Decisions</button>
+          <button class="tab" role="tab" aria-selected="false" data-pane="screen">Screen</button>
+          <button class="tab" role="tab" aria-selected="false" data-pane="posts">Posts</button>
+          <span class="obs">OBS <span id="obs">0</span></span>
         </div>
+
+        <div class="pane" id="pane-trades">
+          <div class="scroll"><table>
+            <thead><tr><th>Time</th><th>Trade</th><th class="r">Value</th><th class="r">Fee</th><th class="r">Realized</th></tr></thead>
+            <tbody id="trades"></tbody>
+          </table></div>
+          <div class="empty" id="trades-empty">No fills yet.</div>
+        </div>
+        <div class="pane" id="pane-decisions" hidden>
+          <div class="scroll"><table>
+            <thead><tr><th>Time</th><th>Decision</th><th>Pair</th><th class="r">Bid / Ask</th><th class="r">Screen</th><th class="r">Outcome</th></tr></thead>
+            <tbody id="decisions"></tbody>
+          </table></div>
+          <div class="empty" id="decisions-empty">Waiting for the worker to write its first tick…</div>
+        </div>
+        <div class="pane" id="pane-screen" hidden>
+          <div id="screens"><div class="empty">No token has been screened yet.</div></div>
+        </div>
+        <div class="pane" id="pane-posts" hidden>
+          <div id="posts"><div class="empty">Nothing posted yet.</div></div>
+        </div>
+
+        <details>
+          <summary><span class="label ink">Performance &amp; limits</span><span class="plus">+</span></summary>
+          <div class="kv" id="limits"></div>
+          <div class="label" style="margin-bottom:6px">Fly wallet</div><div class="addr" id="w-fly">not imported</div>
+          <div class="label" style="margin:12px 0 6px">Fee wallet</div><div class="addr" id="w-fee" style="margin-bottom:18px">not configured</div>
+          <div class="label" style="margin-bottom:6px">Blocklist</div><div class="chips" id="blocklist" style="margin:0 0 18px"><span class="pill">empty</span></div>
+        </details>
       </section>
     </div>
   </div>
-
-  <footer>
-    Read-only view of a local run. Paper mode is simulated execution against real
-    on-chain quotes. The rug screen can only withhold a buy — it never proposes one,
-    and it never blocks an exit. Profitable learning has not been demonstrated;
-    nothing here is financial advice.
-  </footer>
 </div>
 
+<footer>
+  <span><i class="sq" id="host-sq"></i><span id="host">Host offline</span></span>
+  <span class="mid" id="last-obs">Last observation —</span>
+  <span class="live" id="feed-state">Live prices</span>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 "use strict";
 // A static preview embeds a finished run here and replays it. Without it the
 // page tails the live worker over HTTP and server-sent events.
 const PREVIEW = window.STONKFLY_PREVIEW || null;
-const WEI = 10n ** 18n;
 const $ = (id) => document.getElementById(id);
-let lastTick = 0;
-let explorer = null;
-let ethUsd = null;
+const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-function fmtWei(value, digits = 6) {
-  try {
-    const v = BigInt(String(value ?? "0"));
-    const whole = v / WEI;
-    const frac = (v % WEI).toString().padStart(18, "0").slice(0, digits);
-    return `${whole}.${frac}`;
-  } catch { return "—"; }
-}
-function usd(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "—";
-  return "$" + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-function fmtPrice(value) {
-  if (value === null || value === undefined) return "—";
-  const n = Number(value);
-  if (!Number.isFinite(n) || n === 0) return "—";
-  // Memecoin prices in WETH span many orders of magnitude; one notation
-  // throughout keeps the column readable.
-  return n < 1e-4 ? n.toExponential(4) : n.toPrecision(6);
-}
-function shortHash(h) { return h ? h.slice(0, 10) + "…" + h.slice(-6) : ""; }
-function clock(seconds) {
-  return new Date(Number(seconds) * 1000).toLocaleTimeString([], { hour12: false });
-}
-function escape(text) {
-  return String(text ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
+let lastTick = 0, explorer = null, quoteSymbol = "USDG";
+let meta = {}, prov = {}, settings = {};
+let latestByProduct = {}, allRows = [], lastRow = null, lastWall = 0;
 
-function screenTally(screen) {
-  if (!screen || !screen.checks) return null;
-  const total = screen.checks.length;
-  const passed = screen.checks.filter((c) => c.passed).length;
-  return { total, passed, approved: screen.approved };
+/* ---------------- formatting ---------------- */
+function usd(v, digits = 2) {
+  const n = Number(v); if (!Number.isFinite(n)) return "—";
+  return (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
+function signed(v) { const n = Number(v); if (!Number.isFinite(n)) return "—"; return (n >= 0 ? "+" : "-") + usd(Math.abs(n)).slice(0); }
+function price(v) { const n = Number(v); if (!Number.isFinite(n) || n === 0) return "—"; return n < 1e-4 ? n.toExponential(3) : n.toPrecision(6); }
+function qty(v) { const n = Number(v); if (!Number.isFinite(n)) return "—"; return n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n.toPrecision(6); }
+function clock(s) { return new Date(Number(s) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+function ago(s) { const d = Math.max(0, Date.now() / 1000 - Number(s)); return d < 90 ? "just now" : d < 5400 ? Math.round(d / 60) + "m ago" : Math.round(d / 3600) + "h ago"; }
+function esc(t) { return String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function shortHash(h) { return h ? h.slice(0, 8) + "…" + h.slice(-4) : ""; }
+const TILE_COLORS = ["#5aa9ff", "#ffb347", "#b48cff", "#c8ff00", "#ff4d7a", "#5ff2e6", "#ff9ecb", "#8aff80"];
+function tileColor(sym) { let h = 0; for (const c of sym) h = (h * 31 + c.charCodeAt(0)) >>> 0; return TILE_COLORS[h % TILE_COLORS.length]; }
 
-function renderScreens(screens) {
-  const entries = Object.entries(screens || {});
-  if (!entries.length) {
-    $("screens").innerHTML = `<div class="empty">No token has been screened yet.</div>`;
-    return;
+/* ---------------- tabs ---------------- */
+document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", t === b));
+  document.querySelectorAll(".pane").forEach((p) => p.hidden = p.id !== "pane-" + b.dataset.pane);
+}));
+
+/* ---------------- THE BAG ---------------- */
+function renderBag() {
+  const initial = Number(meta.initial_cash);
+  const equity = Number(meta.equity_usd ?? (lastRow && lastRow.equity_usd));
+  if (Number.isFinite(equity)) {
+    const [whole, cents] = equity.toFixed(2).split(".");
+    $("equity").innerHTML = `$${Number(whole).toLocaleString()}<span class="cents">.${cents}</span>`;
+    $("equity").className = "money" + (Number.isFinite(initial) && equity < initial ? " bad" : "");
+    if (Number.isFinite(initial) && initial > 0) {
+      const d = equity - initial, pct = (d / initial) * 100;
+      const el = $("pnl"); el.textContent = `${signed(d)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
+      el.className = "val " + (d >= 0 ? "up" : "down");
+    }
   }
-  $("screens").innerHTML = entries.map(([product, screen]) => {
-    const chips = (screen.checks || []).map((c) =>
-      `<span class="pill ${c.passed ? "ok" : "no"}" title="${escape(c.detail)}">${escape(c.name)}</span>`
-    ).join("");
-    const failed = (screen.checks || []).filter((c) => !c.passed);
-    const why = screen.error
-      ? `screen could not complete: ${escape(screen.error)}`
-      : failed.map((c) => `${escape(c.name)}: ${escape(c.detail)}`).join(" · ");
-    const verdict = screen.approved
-      ? `<span class="pill ok">clear to buy</span>`
-      : `<span class="pill no">buy withheld</span>`;
-    return `<div class="screenblock">
-      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
-        <b>$${escape(product)}</b>${verdict}
-      </div>
-      <div class="checks">${chips}</div>
-      ${why ? `<div class="why">${why}</div>` : ""}
-    </div>`;
+  // Feed age from the newest observation.
+  if (lastWall) {
+    const secs = Date.now() / 1000 - lastWall;
+    const el = $("feed-age");
+    el.textContent = (secs > 300 ? "price feed stale · " : "price feed · ") + ago(lastWall);
+    el.className = "feed" + (secs > 300 ? " warn" : "");
+    $("last-obs").textContent = "Last observation " + ago(lastWall);
+  }
+  // Holdings
+  const cash = Number(meta.cash);
+  const positions = meta.positions || {};
+  const entries = meta.entries || {};
+  const cards = [];
+  const eq = Number.isFinite(equity) && equity > 0 ? equity : NaN;
+  if (Number.isFinite(cash)) {
+    cards.push(`<div class="card">
+      <div class="top"><div class="tile" style="background:var(--cyan)">${quoteSymbol[0]}</div><div><div class="sym">${esc(quoteSymbol)}</div><div class="price">stablecoin · $1.00</div></div></div>
+      <div class="mid"><span class="v">${usd(cash)}</span><span class="d">available</span></div>
+      <div class="bot"><span>${qty(cash)} ${esc(quoteSymbol)}</span><span>${Number.isFinite(eq) ? (cash / eq * 100).toFixed(1) + "%" : "—"}</span></div>
+    </div>`);
+  }
+  let invested = 0;
+  const products = settings.products || Object.keys(positions);
+  for (const sym of products) {
+    const held = Number(positions[sym] ?? 0);
+    const q = latestByProduct[sym] && latestByProduct[sym].quote;
+    const mid = q ? (Number(q.bid) + Number(q.ask)) / 2 : NaN;
+    const value = Number.isFinite(mid) ? held * mid : NaN;
+    if (Number.isFinite(value)) invested += value;
+    const entry = entries[sym] ? Number(entries[sym]) : NaN;
+    const delta = Number.isFinite(entry) && held > 0 && Number.isFinite(mid) ? (mid - entry) * held : NaN;
+    const watching = lastRow && lastRow.product === sym;
+    const blocked = (meta.blocklist || []).some((b) => b.product === sym);
+    cards.push(`<div class="card${watching ? " watch" : ""}">
+      <div class="top"><div class="tile" style="background:${tileColor(sym)}">${esc(sym[0])}</div>
+        <div><div class="sym">${esc(sym)}</div><div class="price">${Number.isFinite(mid) ? usd(mid, mid < 0.01 ? 8 : 4) : "—"} / coin</div></div>
+        ${blocked ? `<span class="watching" style="color:var(--pink)">RUGGED</span>` : watching ? `<span class="watching">WATCHING</span>` : ""}</div>
+      <div class="mid"><span class="v">${held > 0 ? usd(value) : "—"}</span><span class="d ${delta >= 0 ? "up" : "down"}">${Number.isFinite(delta) ? signed(delta) : ""}</span></div>
+      <div class="bot"><span>${held > 0 ? qty(held) + " " + esc(sym) : "not held"}</span><span>${held > 0 && Number.isFinite(eq) ? (value / eq * 100).toFixed(1) + "%" : ""}</span></div>
+    </div>`);
+  }
+  $("cards").innerHTML = cards.join("");
+  $("invested").textContent = Number.isFinite(eq) ? Math.round(invested / eq * 100) + "% invested" : "—";
+}
+
+function renderLimits() {
+  const s = settings, kv = [];
+  const add = (k, v) => kv.push(`<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`);
+  add("Capital", usd(s.capital_usd));
+  add("Per trade", usd(s.order_limit_usd) + " max");
+  add("Minimum trade", usd(s.min_order_usd));
+  add("Loss stop", usd(s.loss_stop_usd));
+  add("Orders / day", s.daily_orders ?? "—");
+  add("Cooldown", s.interval_seconds ? s.interval_seconds + " s" : "—");
+  add("Slippage bound", s.slippage ? (Number(s.slippage) * 100).toFixed(1) + "%" : "—");
+  add("Round-trip limit", s.spread_limit ? (Number(s.spread_limit) * 100).toFixed(1) + "%" : "—");
+  add("Rug screen", prov.screen && prov.screen.enabled ? "on" : "off");
+  add("Liquidity floor", s.min_liquidity_usd ? usd(s.min_liquidity_usd, 0) : "—");
+  add("Tax ceiling", s.max_transfer_tax ? (Number(s.max_transfer_tax) * 100).toFixed(1) + "%" : "—");
+  add("Rug drawdown", s.rug_drawdown ? (Number(s.rug_drawdown) * 100).toFixed(0) + "%" : "—");
+  add("Rugs recorded", (meta.rugs || []).length);
+  add("Adaptation", s.adapt_enabled === false ? "off" : "on");
+  add("Gas spent", meta.gas_spent ? Number(meta.gas_spent).toFixed(6) + " ETH" : "—");
+  add("ETH / USD", meta.eth_usd ? usd(meta.eth_usd) : "—");
+  add("Posts to X", prov.social && prov.social.live ? "live" : "drafting locally");
+  add("Network", (prov.network && prov.network.name) || meta.network || "—");
+  $("limits").innerHTML = kv.join("");
+  const wallets = prov.wallets || {};
+  $("w-fly").textContent = wallets.fly || "not imported";
+  $("w-fee").textContent = wallets.fee || "not configured";
+  const blocked = meta.blocklist || [];
+  $("blocklist").innerHTML = blocked.length
+    ? blocked.map((b) => `<span class="pill no" title="${esc(b.reason)}">${esc(b.product)}</span>`).join("")
+    : `<span class="pill">empty</span>`;
+}
+
+function renderScreens() {
+  const entries = Object.entries(meta.screens || {});
+  if (!entries.length) { $("screens").innerHTML = `<div class="empty">No token has been screened yet.</div>`; return; }
+  $("screens").innerHTML = entries.map(([product, v]) => {
+    const chips = (v.checks || []).map((c) => `<span class="pill ${c.passed ? "ok" : "no"}" title="${esc(c.detail)}">${esc(c.name)}</span>`).join("");
+    const failed = (v.checks || []).filter((c) => !c.passed);
+    const why = v.error ? "screen could not complete: " + esc(v.error) : failed.map((c) => `${esc(c.name)}: ${esc(c.detail)}`).join(" · ");
+    return `<div class="verdict"><div class="head"><b>${esc(product)}</b>${v.approved ? `<span class="pill ok">clear to buy</span>` : `<span class="pill no">buy withheld</span>`}</div>
+      <div class="chips">${chips}</div>${why ? `<div class="why">${why}</div>` : ""}</div>`;
   }).join("");
 }
 
 function renderPosts(posts) {
-  if (!posts || !posts.length) {
-    $("posts").innerHTML = `<div class="empty">Nothing posted yet.</div>`;
-    return;
-  }
-  $("posts").innerHTML = posts.slice().reverse().slice(0, 12).map((p) => {
+  if (!posts || !posts.length) { $("posts").innerHTML = `<div class="empty">Nothing posted yet.</div>`; return; }
+  $("posts").innerHTML = posts.slice().reverse().slice(0, 15).map((p) => {
     const cls = p.status === "SENT" ? "ok" : p.status === "FAILED" ? "no" : "warn";
-    const link = p.url
-      ? `<a href="${escape(p.url)}" target="_blank" rel="noopener">view</a>` : "";
-    return `<div class="post">
-      <p>${escape(p.text)}</p>
-      <div class="meta"><span class="pill ${cls}">${escape(p.status)}</span>
-        <span>${clock(p.at)}</span>${link}</div>
-    </div>`;
+    return `<div class="post"><p>${esc(p.text)}</p><div class="meta"><span class="pill ${cls}">${esc(p.status)}</span><span>${clock(p.at)}</span>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">view</a>` : ""}</div></div>`;
   }).join("");
 }
 
 function renderState(s) {
-  const meta = s.meta || {};
-  const prov = s.provenance || {};
-  const mode = meta.mode || "—";
-  const modeEl = $("mode");
-  modeEl.textContent = mode;
-  modeEl.className = "tag " + (mode === "live" ? "live" : "paper");
-  $("network").textContent = (prov.network && prov.network.name) || meta.network || "—";
-  $("source").textContent = prov.feed || "—";
+  meta = s.meta || {}; prov = s.provenance || {}; settings = prov.settings || {};
   explorer = (prov.network && prov.network.explorer) || null;
-  ethUsd = meta.eth_usd ? Number(meta.eth_usd) : null;
-  $("ethusd").textContent = ethUsd ? "ETH " + usd(ethUsd) : "ETH —";
-
-  const settings = prov.settings || {};
-  $("limit").innerHTML = settings.order_limit_usd
-    ? usd(settings.order_limit_usd) + " <small>max</small>" : "—";
-  $("cash").innerHTML = ethUsd && meta.cash ? usd(Number(meta.cash) * ethUsd) : "—";
-  if (meta.equity_usd) $("equity").innerHTML = usd(meta.equity_usd);
-  $("tick").textContent = meta.tick ?? "—";
-
-  const rugs = meta.rugs || [];
-  const blocked = meta.blocklist || [];
-  $("rugs").innerHTML = rugs.length
-    ? `<span class="v bad">${rugs.length}</span>` : "0";
-  const screens = meta.screens || {};
-  const withheld = Object.values(screens).filter((v) => !v.approved).length;
-  $("avoided").textContent = withheld;
-  renderScreens(screens);
-
-  $("block-card").hidden = blocked.length === 0;
-  $("blocklist").innerHTML = blocked.map((b) =>
-    `<div><span>$${escape(b.product)}</span><b class="pill no" title="${escape(b.reason)}">blocked</b></div>`
-  ).join("");
-
-  const wallets = prov.wallets || {};
-  $("w-fly").textContent = wallets.fly || "not imported";
-  $("w-fee").textContent = wallets.fee || "not configured";
-  const fees = meta.fees || {};
-  $("f-gross").textContent = fmtWei(fees.gross_wei) + " WETH";
-
-  const positions = meta.positions || {};
-  const rows = Object.entries(positions).filter(([, v]) => Number(v) !== 0);
-  $("positions").innerHTML = rows.length
-    ? rows.map(([k, v]) => `<div><span>$${escape(k)}</span><b>${Number(v).toPrecision(6)}</b></div>`).join("")
-    : `<div><span>Flat</span><b>—</b></div>`;
+  quoteSymbol = settings.quote_symbol || "USDG";
+  $("quote-sym").textContent = quoteSymbol;
+  renderBag(); renderLimits(); renderScreens();
 }
 
+/* ---------------- rows ---------------- */
+function tradeRow(row, fresh) {
+  const ex = row.execution || {}, n = row.neural || {}, q = row.quote || {}, side = n.side;
+  const filled = ex.status === "FILLED" || ex.status === "SETTLED";
+  if (!filled) return;
+  const qd = Number((q.quote_decimals ?? 6)), bd = Number(q.base_decimals ?? 18);
+  const value = ex.quote_wei ? Number(ex.quote_wei) / 10 ** qd : Number(row.notional_usd);
+  const units = ex.base_wei ? Number(ex.base_wei) / 10 ** bd : NaN;
+  const fee = ex.fee_wei ? Number(ex.fee_wei) / 10 ** qd : 0;
+  const mark = side === "BUY" ? q.ask : q.bid;
+  const link = ex.tx_hash && explorer ? ` <a href="${esc(explorer)}/tx/${esc(ex.tx_hash)}" target="_blank" rel="noopener">${shortHash(ex.tx_hash)}</a>` : "";
+  const realized = side === "SELL" && row.pnl_delta_usd ? signed(row.pnl_delta_usd) : "—";
+  const tr = document.createElement("tr"); if (fresh) tr.className = "fresh";
+  tr.innerHTML = `<td>${clock(row.wall_time)}<span class="k">#${esc(row.tick)}</span></td>
+    <td><span class="side ${esc(side)}">${esc(side)} ${esc(row.product)}</span><span class="k">${qty(units)} @ ${usd(mark, 8)}${link}</span></td>
+    <td class="r">${usd(value)}</td><td class="r">${fee ? usd(fee) : "—"}</td>
+    <td class="r ${side === "SELL" && Number(row.pnl_delta_usd) < 0 ? "SELL" : "BUY"}">${realized}</td>`;
+  const body = $("trades"); body.prepend(tr); while (body.children.length > 100) body.lastElementChild.remove();
+  $("trades-empty").hidden = true;
+  $("n-trades").textContent = body.children.length;
+}
+function decisionRow(row, fresh) {
+  const ex = row.execution || {}, n = row.neural || {}, q = row.quote || {}, side = n.side || "HOLD";
+  const status = ex.status || "—";
+  const cls = status === "FILLED" || status === "SETTLED" ? "ok" : (status === "VETO" || status === "REVERTED" || status === "REJECTED") ? "no" : "";
+  const sc = row.screen && row.screen.checks ? `<span class="pill ${row.screen.approved ? "ok" : "no"}">${row.screen.checks.filter((c) => c.passed).length}/${row.screen.checks.length}</span>` : `<span class="pill">—</span>`;
+  const tr = document.createElement("tr"); if (fresh) tr.className = "fresh";
+  tr.innerHTML = `<td>${clock(row.wall_time)}<span class="k">#${esc(row.tick)}</span></td>
+    <td><span class="side ${esc(side)}">${esc(side)}</span>${row.rug ? `<span class="k" style="color:var(--pink)">rug detected</span>` : n.stimulus ? `<span class="k">${esc(n.stimulus)} input</span>` : ""}</td>
+    <td>${esc(row.product)}</td><td class="r">${price(q.bid)}<span class="k">${price(q.ask)}</span></td><td class="r">${sc}</td>
+    <td class="r"><span class="pill ${cls}" title="${esc(ex.reason || "")}">${esc(status)}</span>${ex.reason ? `<span class="k" style="max-width:220px;white-space:normal">${esc(ex.reason)}</span>` : ""}</td>`;
+  const body = $("decisions"); body.prepend(tr); while (body.children.length > 150) body.lastElementChild.remove();
+  $("decisions-empty").hidden = true;
+}
+function renderOrder(row) {
+  const n = row.neural || {}, ex = row.execution || {}, side = n.side || "HOLD";
+  $("o-big").className = "big " + side;
+  $("o-side").textContent = side === "HOLD" ? "HOLD" : `${side} ${row.product}`;
+  $("o-status").textContent = ex.status === "VETO" ? (ex.reason || "Vetoed") : ex.status === "FILLED" || ex.status === "SETTLED" ? "Filled" : ex.status === "HOLD" ? "No order" : (ex.status || "");
+  const kind = row.rug ? "aversive" : n.stimulus;
+  const ms = row.rug ? Number(settings.pulse_ms || 200) * Number(settings.rug_pulse_multiplier || 2) : Number(settings.pulse_ms || 200);
+  const cells = kind === "reward" ? "15 PAM11 cells" : "2 PPL101 cells";
+  const spikes = kind === "reward" ? n.reward_spikes : n.aversive_spikes;
+  $("o-sub").textContent = kind && kind !== "none"
+    ? `${kind.toUpperCase()} INPUT${row.rug ? " (RUG)" : ""} · ${ms} ms → ${cells}${spikes !== undefined ? ` · ${spikes} spikes this observation` : ""}`
+    : `No reinforcement this observation · decoder Δ ${Number(n.difference_hz ?? 0).toFixed(2)} Hz · ${n.gate_spikes ?? 0} gate spikes`;
+  $("n-spikes").textContent = n.total_spikes !== undefined ? (n.total_spikes >= 1000 ? (n.total_spikes / 1000).toFixed(2) + "K" : n.total_spikes) : "—";
+  $("n-mem").textContent = n.memory && n.memory.changed_edges !== undefined ? Number(n.memory.changed_edges).toLocaleString() : "—";
+  $("n-time").textContent = n.brain_ms !== undefined ? (Number(n.brain_ms) / 1000).toFixed(1) + " S" : "—";
+}
 function renderTrade(row, fresh) {
-  const neural = row.neural || {};
-  const exec = row.execution || {};
-  const quote = row.quote || {};
-  const side = neural.side || "HOLD";
-  const status = exec.status || "—";
-  const cls = status === "SETTLED" || status === "FILLED" ? "ok"
-            : (status === "VETO" || status === "REVERTED" || status === "REJECTED") ? "no" : "";
-  const link = exec.tx_hash && explorer
-    ? ` <a href="${escape(explorer)}/tx/${escape(exec.tx_hash)}" target="_blank" rel="noopener">${shortHash(exec.tx_hash)}</a>`
-    : "";
-  const tally = screenTally(row.screen);
-  const screenCell = tally
-    ? `<span class="pill ${tally.approved ? "ok" : "no"}">${tally.passed}/${tally.total}</span>`
-    : `<span class="pill">—</span>`;
-  const size = side === "HOLD" ? "—" : usd(row.notional_usd);
-  const tr = document.createElement("tr");
-  if (fresh) tr.className = "fresh";
-  tr.innerHTML = `
-    <td>${escape(row.tick ?? "")}</td>
-    <td>${clock(row.wall_time)}</td>
-    <td>$${escape(row.product ?? "")}</td>
-    <td class="side ${side}">${escape(side)}</td>
-    <td>${size}</td>
-    <td>${fmtPrice(quote.bid)}</td>
-    <td>${fmtPrice(quote.ask)}</td>
-    <td>${screenCell}</td>
-    <td><span class="pill ${cls}" title="${escape(exec.reason || "")}">${escape(status)}</span>${link}</td>`;
-  const feed = $("feed");
-  feed.prepend(tr);
-  while (feed.children.length > 200) feed.lastElementChild.remove();
-  $("feed-empty").hidden = true;
-
-  if (row.equity_usd) $("equity").innerHTML = usd(row.equity_usd);
-  $("n-diff").textContent = neural.difference_hz !== undefined
-    ? Number(neural.difference_hz).toFixed(3) : "—";
-  $("n-gate").textContent = neural.gate_spikes ?? "—";
-  $("n-stim").textContent = row.rug ? "aversive (rug)" : (neural.stimulus ?? "—");
-  $("n-mem").textContent = (neural.memory && neural.memory.changed_edges) ?? "—";
-  $("n-scale").textContent = row.size_scale ? Number(row.size_scale).toFixed(2) + "×" : "—";
-  $("frame").src = PREVIEW ? PREVIEW.frame : "/latest-input.png?t=" + Date.now();
+  allRows.push(row); lastRow = row; lastWall = Math.max(lastWall, Number(row.wall_time) || 0);
+  latestByProduct[row.product] = row;
   lastTick = Math.max(lastTick, Number(row.tick) || 0);
+  $("obs").textContent = lastTick;
+  decisionRow(row, fresh); tradeRow(row, fresh); renderOrder(row); renderBag();
+  if (row.neural && row.neural.side !== "HOLD" && fresh) scene.twitch();
+}
+function connected(on) {
+  $("host-sq").className = "sq" + (on ? " on" : "");
+  $("host").textContent = on ? "Host online" : "Host offline";
+  $("feed-state").textContent = on ? "Live prices" : "Reconnecting";
 }
 
-function connected(on) {
-  $("dot").className = on ? "dot on" : "dot";
-  $("conn").textContent = on ? "live" : "reconnecting";
-}
+/* ---------------- FLY.EXE — the scene ---------------- */
+const scene = (() => {
+  if (!window.THREE) return { twitch() {}, frame() {} };
+  const host = $("scene");
+  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+  renderer.setPixelRatio(1);
+  host.prepend(renderer.domElement);
+  const sc = new THREE.Scene();
+  sc.background = new THREE.Color(0x0d0a18);
+  sc.fog = new THREE.Fog(0x0d0a18, 9, 22);
+  const cam = new THREE.PerspectiveCamera(38, 16 / 11, 0.1, 60);
+  const orbit = { theta: -0.42, phi: 1.1, r: 8.6, drag: false, x: 0, y: 0 };
+  const target = new THREE.Vector3(0.2, 0.9, -0.2);
+  function place() {
+    cam.position.set(target.x + orbit.r * Math.sin(orbit.phi) * Math.sin(orbit.theta), target.y + orbit.r * Math.cos(orbit.phi), target.z + orbit.r * Math.sin(orbit.phi) * Math.cos(orbit.theta));
+    cam.lookAt(target);
+  }
+  sc.add(new THREE.AmbientLight(0x6a5aa8, 0.9));
+  const key = new THREE.PointLight(0x5ff2e6, 1.1, 18); key.position.set(-1.5, 3.2, 2.2); sc.add(key);
+  const pink = new THREE.PointLight(0xff4d7a, 0.7, 14); pink.position.set(3, 2.5, -2); sc.add(pink);
+  const screenGlow = new THREE.PointLight(0x9bd1ff, 1.4, 6); screenGlow.position.set(1.6, 1.9, -1.1); sc.add(screenGlow);
+
+  const mat = (c, extra = {}) => new THREE.MeshLambertMaterial({ color: c, ...extra });
+  const edge = (geo, c) => new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: c }));
+  // Room
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), mat(0x120e22)); floor.rotation.x = -Math.PI / 2; floor.position.y = -1.6; sc.add(floor);
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(40, 14), mat(0x0f0b1c)); wall.position.set(0, 4, -7); sc.add(wall);
+  // Ticker rain on the wall: falling squares in the accent hues.
+  const RAIN = 900, rainPos = new Float32Array(RAIN * 3), rainCol = new Float32Array(RAIN * 3), rainSpeed = new Float32Array(RAIN);
+  const hues = [[0.37, 1, 0.5], [0.94, 1, 0.65], [0.48, 0.9, 0.7]];
+  for (let i = 0; i < RAIN; i++) {
+    rainPos[i * 3] = (Math.random() - 0.5) * 30; rainPos[i * 3 + 1] = Math.random() * 12 - 1.5; rainPos[i * 3 + 2] = -6.9 + Math.random() * 0.4;
+    const c = new THREE.Color().setHSL(...hues[i % 3]); rainCol.set([c.r, c.g, c.b], i * 3); rainSpeed[i] = 0.4 + Math.random() * 1.4;
+  }
+  const rainGeo = new THREE.BufferGeometry();
+  rainGeo.setAttribute("position", new THREE.BufferAttribute(rainPos, 3));
+  rainGeo.setAttribute("color", new THREE.BufferAttribute(rainCol, 3));
+  sc.add(new THREE.Points(rainGeo, new THREE.PointsMaterial({ size: 0.09, vertexColors: true, transparent: true, opacity: 0.75 })));
+  // Desk
+  const deskGeo = new THREE.BoxGeometry(8.5, 0.28, 3.6);
+  const desk = new THREE.Mesh(deskGeo, mat(0x1b1730)); desk.position.set(0.5, 0, -0.4); sc.add(desk);
+  const deskEdge = edge(deskGeo, 0x5ff2e6); deskEdge.position.copy(desk.position); sc.add(deskEdge);
+  for (const [x, z] of [[-3.4, -1.9], [4.4, -1.9], [-3.4, 1.1], [4.4, 1.1]]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.5, 0.16), mat(0x1b1730)); leg.position.set(x, -0.85, z); sc.add(leg);
+    const le = edge(leg.geometry, x < 0 ? 0xff4d7a : 0x5ff2e6); le.position.copy(leg.position); sc.add(le);
+  }
+  // Monitor, showing what the fly is actually looking at.
+  const monGeo = new THREE.BoxGeometry(3.4, 2.0, 0.14);
+  const mon = new THREE.Mesh(monGeo, mat(0x0b0b12)); mon.position.set(1.6, 1.45, -1.55); mon.rotation.y = -0.18; sc.add(mon);
+  const monEdge = edge(monGeo, 0x8a94c8); monEdge.position.copy(mon.position); monEdge.rotation.copy(mon.rotation); sc.add(monEdge);
+  const stand = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.5, 0.3), mat(0x0b0b12)); stand.position.set(1.6, 0.35, -1.6); sc.add(stand);
+  const frameCanvas = document.createElement("canvas"); frameCanvas.width = 320; frameCanvas.height = 180;
+  const fctx = frameCanvas.getContext("2d"); fctx.fillStyle = "#ebf0f9"; fctx.fillRect(0, 0, 320, 180);
+  const tex = new THREE.CanvasTexture(frameCanvas); tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
+  const screenMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 1.74), new THREE.MeshBasicMaterial({ map: tex }));
+  screenMesh.position.set(1.6 + Math.sin(0.18) * 0.08, 1.47, -1.55 + Math.cos(0.18) * 0.08); screenMesh.rotation.y = -0.18; sc.add(screenMesh);
+  const frameImg = new Image();
+  frameImg.onload = () => { fctx.drawImage(frameImg, 0, 0, 320, 180); tex.needsUpdate = true; };
+  // Keyboard, mug
+  const kb = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.08, 0.6), mat(0x22203a)); kb.position.set(1.2, 0.18, 0.1); kb.rotation.y = 0.12; sc.add(kb);
+  const kbe = edge(kb.geometry, 0xff4d7a); kbe.position.copy(kb.position); kbe.rotation.copy(kb.rotation); sc.add(kbe);
+  const mug = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.18, 0.42, 10), mat(0x3a2b5a)); mug.position.set(3.2, 0.35, 0.5); sc.add(mug);
+  // The fly
+  const fly = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.72, 1), mat(0x3c4152, { flatShading: true })); body.scale.set(1.35, 0.85, 0.9); fly.add(body);
+  const thorax = new THREE.Mesh(new THREE.IcosahedronGeometry(0.5, 1), mat(0x4a5066, { flatShading: true })); thorax.position.set(0.85, 0.15, 0); fly.add(thorax);
+  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.36, 1), mat(0x2e3242, { flatShading: true })); head.position.set(1.42, 0.18, 0); fly.add(head);
+  for (const z of [-0.24, 0.24]) { const eye = new THREE.Mesh(new THREE.SphereGeometry(0.19, 8, 6), new THREE.MeshLambertMaterial({ color: 0xe8203a, emissive: 0x6a0a18 })); eye.position.set(1.62, 0.28, z); fly.add(eye); }
+  const legMat = mat(0xb9bfd6); const legs = [];
+  for (let i = 0; i < 6; i++) {
+    const side = i < 3 ? 1 : -1, k = i % 3;
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.03, 1.15, 5), legMat);
+    leg.position.set(-0.4 + k * 0.6, -0.35, side * 0.55); leg.rotation.set(side * 0.9, 0, (k - 1) * 0.35); fly.add(leg); legs.push(leg);
+  }
+  // Wings are small and glassy so the body, eyes and legs carry the silhouette.
+  const wingMat = new THREE.MeshLambertMaterial({ color: 0xcfeeff, transparent: true, opacity: 0.22, side: THREE.DoubleSide });
+  const wings = [];
+  for (const side of [-1, 1]) { const w = new THREE.Mesh(new THREE.CircleGeometry(0.62, 12), wingMat); w.scale.set(1.25, 0.42, 1); w.position.set(-0.05, 0.55, side * 0.38); w.rotation.set(Math.PI / 2 + side * 0.35, 0, side * -0.55); fly.add(w); wings.push({ m: w, side }); }
+  fly.position.set(-1.3, 0.78, 0.35); fly.rotation.y = 0.95; fly.scale.setScalar(0.8); sc.add(fly);
+
+  // Orbit by drag; slow drift when idle.
+  const el = renderer.domElement;
+  el.addEventListener("pointerdown", (e) => { orbit.drag = true; orbit.x = e.clientX; orbit.y = e.clientY; el.setPointerCapture(e.pointerId); });
+  el.addEventListener("pointermove", (e) => { if (!orbit.drag) return; orbit.theta -= (e.clientX - orbit.x) * 0.008; orbit.phi = Math.min(1.45, Math.max(0.5, orbit.phi - (e.clientY - orbit.y) * 0.006)); orbit.x = e.clientX; orbit.y = e.clientY; place(); });
+  el.addEventListener("pointerup", () => orbit.drag = false); el.addEventListener("pointercancel", () => orbit.drag = false);
+  el.addEventListener("wheel", (e) => { e.preventDefault(); orbit.r = Math.min(12, Math.max(5, orbit.r + e.deltaY * 0.004)); place(); }, { passive: false });
+
+  let motion = !REDUCED, t = 0, twitchUntil = 0, drift = 0.0009;
+  $("motion").textContent = motion ? "Pause motion" : "Resume motion";
+  $("motion").addEventListener("click", () => { motion = !motion; $("motion").textContent = motion ? "Pause motion" : "Resume motion"; if (motion) loop(); });
+  function resize() {
+    const w = host.clientWidth, h = host.clientHeight || Math.round(w * 11 / 16);
+    // Render small and let CSS scale it up: that is where the pixels come from.
+    renderer.setSize(Math.max(120, Math.floor(w / 3)), Math.max(80, Math.floor(h / 3)), false);
+    cam.aspect = w / h; cam.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe(host); resize(); place();
+  function step() {
+    t += 1 / 60;
+    if (!orbit.drag) { orbit.theta += drift; place(); }
+    const pos = rainGeo.attributes.position.array;
+    for (let i = 0; i < RAIN; i++) { pos[i * 3 + 1] -= rainSpeed[i] * 0.03; if (pos[i * 3 + 1] < -1.5) pos[i * 3 + 1] = 10.5; }
+    rainGeo.attributes.position.needsUpdate = true;
+    const busy = performance.now() < twitchUntil;
+    const flutter = busy ? Math.sin(t * 90) * 0.9 : Math.sin(t * 22) * 0.12;
+    for (const { m, side } of wings) m.rotation.z = side * -0.4 + flutter * side;
+    fly.position.y = 0.78 + Math.sin(t * 2.2) * 0.02 + (busy ? Math.abs(Math.sin(t * 30)) * 0.12 : 0);
+    legs.forEach((l, i) => l.rotation.x = (i < 3 ? 1 : -1) * 0.9 + Math.sin(t * 6 + i) * 0.04);
+    renderer.render(sc, cam);
+  }
+  function loop() { if (!motion) return; step(); requestAnimationFrame(loop); }
+  if (motion) loop(); else { step(); }
+  return {
+    twitch() { twitchUntil = performance.now() + 900; if (!motion) { step(); } },
+    frame(src) { frameImg.src = src; },
+  };
+})();
+
+/* ---------------- data ---------------- */
+function frameSrc() { return PREVIEW ? PREVIEW.frame : "/latest-input.png?t=" + Date.now(); }
 
 function preview() {
-  const b = $("banner");
-  b.innerHTML = PREVIEW.banner;
-  b.dataset.on = "1";
+  const b = $("banner"); b.innerHTML = PREVIEW.banner; b.dataset.on = "1";
+  $("audit").hidden = true;
   renderState(PREVIEW.state);
-  const rest = PREVIEW.trades.slice(0, PREVIEW.at_rest);
-  rest.forEach((row) => renderTrade(row, false));
+  PREVIEW.trades.slice(0, PREVIEW.at_rest).forEach((row) => renderTrade(row, false));
   renderPosts(PREVIEW.posts.slice(0, PREVIEW.posts_at_rest));
-  connected(true);
-  // Replay the remainder as if the worker were still writing.
-  let i = PREVIEW.at_rest;
-  let p = PREVIEW.posts_at_rest;
+  scene.frame(PREVIEW.frame); connected(true);
+  let i = PREVIEW.at_rest, p = PREVIEW.posts_at_rest;
   const step = () => {
     if (i >= PREVIEW.trades.length) return;
-    const row = PREVIEW.trades[i++];
-    renderTrade(row, true);
+    const row = PREVIEW.trades[i++]; renderTrade(row, true);
     const due = PREVIEW.posts.filter((x) => x.at <= row.wall_time).length;
     if (due > p) { p = due; renderPosts(PREVIEW.posts.slice(0, p)); }
-    if (row.state) renderState(row.state);
     setTimeout(step, PREVIEW.interval_ms);
   };
   setTimeout(step, PREVIEW.interval_ms);
 }
-
 async function bootstrap() {
   if (PREVIEW) { preview(); return; }
   try {
@@ -408,9 +628,9 @@ async function bootstrap() {
     const { trades } = await (await fetch("/api/trades")).json();
     trades.forEach((row) => renderTrade(row, false));
     renderPosts((await (await fetch("/api/posts")).json()).posts);
+    scene.frame(frameSrc());
   } catch { /* the stream retry below covers a cold start */ }
 }
-
 function stream() {
   if (PREVIEW) return;
   // Resume from the last tick already rendered so a reconnect misses nothing.
@@ -418,17 +638,10 @@ function stream() {
   es.addEventListener("open", () => connected(true));
   es.addEventListener("state", (e) => renderState(JSON.parse(e.data)));
   es.addEventListener("posts", (e) => renderPosts(JSON.parse(e.data).posts));
-  es.addEventListener("trade", (e) => {
-    const row = JSON.parse(e.data);
-    if ((Number(row.tick) || 0) > lastTick) renderTrade(row, true);
-  });
-  es.addEventListener("error", () => {
-    connected(false);
-    es.close();
-    setTimeout(stream, 3000);
-  });
+  es.addEventListener("trade", (e) => { const row = JSON.parse(e.data); if ((Number(row.tick) || 0) > lastTick) { renderTrade(row, true); scene.frame(frameSrc()); } });
+  es.addEventListener("error", () => { connected(false); es.close(); setTimeout(stream, 3000); });
 }
-
+setInterval(() => { if (lastWall) renderBag(); }, 30000);
 bootstrap().then(stream);
 </script>
 </body>

@@ -1,8 +1,9 @@
 """Durable money accounting and order intent. All values use Decimal strings.
 
-Balances are WETH; positions are memecoin quantities; gas is native ETH. Gas is
-tracked separately from tradable cash but subtracted from equity, so the
-reinforcement signal reflects what the run actually costs to operate.
+Cash is USDG, which is dollars; positions are memecoin quantities; gas is
+native ETH. Gas is tracked separately from tradable cash and subtracted from
+equity at the current ETH/USD reference, so the reinforcement signal reflects
+what the run actually costs to operate.
 """
 
 import contextlib
@@ -12,12 +13,13 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-from .config import D, QUOTE_DECIMALS, from_wei
+from .config import D, GAS_DECIMALS, from_wei
+from .pricing import gas_to_usd
 from .fees import FeeBook
 
 
 class Ledger:
-    def __init__(self, path, settings, mode, capital_weth=None):
+    def __init__(self, path, settings, mode, capital=None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path, isolation_level=None)
@@ -44,8 +46,8 @@ class Ledger:
         )
         self.fees = FeeBook(self)
         if self.get("settings") is None:
-            if capital_weth is None:
-                raise ValueError("A new ledger needs its starting WETH balance")
+            if capital is None:
+                raise ValueError("A new ledger needs its starting USDG balance")
             with self.transaction():
                 for k, v in {
                     "settings": settings.signature(),
@@ -54,12 +56,12 @@ class Ledger:
                     "settings_full": dataclasses.asdict(settings),
                     "mode": mode,
                     "network": settings.network,
-                    "cash": str(capital_weth),
-                    "initial_cash": str(capital_weth),
+                    "cash": str(capital),
+                    "initial_cash": str(capital),
                     "positions": {},
                     "entries": {},
                     "gas_spent": "0",
-                    "anchor": str(capital_weth),
+                    "anchor": str(capital),
                     "tick": 0,
                     "checkpoint": None,
                     "halted": None,
@@ -103,9 +105,11 @@ class Ledger:
     def positions(self):
         return {k: D(v) for k, v in self.get("positions").items()}
 
-    def equity(self, quotes):
+    def equity(self, quotes, eth_usd):
+        """Dollars: cash plus holdings at bid, less gas at the current ETH price."""
         held = sum((v * quotes[p].bid for p, v in self.positions.items()), D(0))
-        return self.cash + held - self.gas_spent
+        gas_wei = int(self.gas_spent * (D(10) ** GAS_DECIMALS))
+        return self.cash + held - gas_to_usd(gas_wei, eth_usd)
 
     def halt(self, reason):
         self.put("halted", reason)
@@ -203,8 +207,8 @@ class Ledger:
                 raise RuntimeError("Cannot settle a rejected intent")
             p = json.loads(row[1])
             base = from_wei(base_wei, p["base_decimals"])
-            quote = from_wei(quote_wei, QUOTE_DECIMALS)
-            fee = from_wei(fee_wei, QUOTE_DECIMALS)
+            quote = from_wei(quote_wei, p["quote_decimals"])
+            fee = from_wei(fee_wei, p["quote_decimals"])
             positions = self.positions
             held = positions.get(p["product"], D(0))
             cash = self.cash
@@ -228,7 +232,7 @@ class Ledger:
                 raise RuntimeError("Fill exceeds reserved account funds")
             self.put("cash", str(cash))
             self.put("positions", {k: str(v) for k, v in positions.items()})
-            self.put("gas_spent", str(self.gas_spent + from_wei(gas_wei, 18)))
+            self.put("gas_spent", str(self.gas_spent + from_wei(gas_wei, GAS_DECIMALS)))
             self.db.execute(
                 "UPDATE orders SET status='SETTLED',settlement=? WHERE id=?",
                 (json.dumps(payload), cid),
@@ -316,7 +320,7 @@ class Ledger:
         if not gas_wei:
             return
         with self.transaction():
-            self.put("gas_spent", str(self.gas_spent + from_wei(gas_wei, 18)))
+            self.put("gas_spent", str(self.gas_spent + from_wei(gas_wei, GAS_DECIMALS)))
 
     def commit_tick(self, anchor, checkpoint, observation=None):
         with self.transaction():

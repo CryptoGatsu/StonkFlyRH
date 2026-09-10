@@ -6,7 +6,7 @@ from stonkflyrh.config import D, Settings
 from stonkflyrh.fees import BPS_DENOMINATOR, FeeBook, fee_wallet, gross_fee_wei
 from stonkflyrh.ledger import Ledger
 
-CAPITAL = D("0.04")
+CAPITAL = D("100")
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ def test_report_carries_the_destination(book, monkeypatch):
     fees, _ = book
     monkeypatch.setenv("STONKFLYRH_FEE_WALLET", "0x" + "ab" * 20)
     fees.accrue("order-1", 10**18, 100, 0)
-    report = fees.report()
+    report = fees.report(quote_decimals=18)
     assert report["gross"] == "0.01"
     assert report["fee_wallet"].lower() == "0x" + "ab" * 20
     assert report["unpaid_wei"] == 10**16

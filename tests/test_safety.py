@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from stonkflyrh.config import D, QUOTE_DECIMALS, Settings, to_wei
+from stonkflyrh.config import D, Settings, to_wei
 from stonkflyrh.ledger import Ledger
 from stonkflyrh.market import Quote
 from stonkflyrh.risk import Guard, Veto
@@ -24,7 +24,8 @@ WETH = "0x" + "11" * 20
 TOKEN = "0x" + "22" * 20
 POOL = "0x" + "33" * 20
 ETH_USD = D("2500")
-CAPITAL = D("0.04")
+CAPITAL = D("100")
+QD = 6
 
 
 class Result:
@@ -55,11 +56,11 @@ class FakePool:
 
     def __init__(
         self,
-        price=D("0.0000001"),
+        price=D("0.00025"),
         pool_fee=10000,
         tax=D("0"),
-        depth=D("50"),
-        pool_weth=to_wei("20", QUOTE_DECIMALS),
+        depth=D("125000"),
+        pool_weth=to_wei("50000", QD),
         upgradeable=False,
         selectors=(),
         owner=None,
@@ -106,19 +107,22 @@ class FakePool:
     # -- the quoter ---------------------------------------------------------
 
     def quote(self, token_in, _token_out, amount_in, _fee):
+        """6-decimal USDG against an 18-decimal memecoin; depth is in USDG."""
         net = D(amount_in) * (1 - self.pool_fee) * (1 - self.tax)
+        scale = D(10) ** 12
         if token_in.lower() == WETH.lower():
-            impact = min(D("0.9"), D(amount_in) / (self.depth * D(10) ** QUOTE_DECIMALS))
-            return int(net * (1 - impact) / self.price)
+            impact = min(D("0.9"), D(amount_in) / (self.depth * D(10) ** QD))
+            return int(net * (1 - impact) / self.price * scale)
         if not self.sellable:
             return 0
-        out = net * self.price
-        impact = min(D("0.9"), out / (self.depth * D(10) ** QUOTE_DECIMALS))
+        out = net * self.price / scale
+        impact = min(D("0.9"), out / (self.depth * D(10) ** QD))
         return int(out * (1 - impact))
 
 
 class FakeRegistry:
     quote_address = WETH
+    quote_decimals = QD
 
     def token(self, symbol):
         return {"symbol": symbol, "address": TOKEN, "decimals": 18}
@@ -135,10 +139,10 @@ def build(tmp_path, pool=None, **overrides):
     return settings, ledger, screen, chain
 
 
-def quote_for(price=D("0.0000001"), **changes):
+def quote_for(price=D("0.00025"), **changes):
     q = Quote(
         "PONS", price * D("0.99"), price * D("1.01"), time.time(), 18,
-        QUOTE_DECIMALS, 10000, D("0.004"), D("40000"),
+        QD, 10000, D("10"), D("40000"),
     )
     import dataclasses
 
@@ -209,7 +213,7 @@ def test_a_small_tax_inside_the_ceiling_passes(tmp_path):
 
 
 def test_a_thin_pool_fails_price_impact(tmp_path):
-    _, ledger, screen, _ = build(tmp_path, pool=FakePool(depth=D("0.05")))
+    _, ledger, screen, _ = build(tmp_path, pool=FakePool(depth=D("150")))
     try:
         verdict = screen.assess("PONS", POOL, ETH_USD)
         impact = next(c for c in verdict.checks if c.name == "price_impact")
@@ -219,9 +223,7 @@ def test_a_thin_pool_fails_price_impact(tmp_path):
 
 
 def test_shallow_liquidity_is_rejected(tmp_path):
-    _, ledger, screen, _ = build(
-        tmp_path, pool=FakePool(pool_weth=to_wei("0.5", QUOTE_DECIMALS))
-    )
+    _, ledger, screen, _ = build(tmp_path, pool=FakePool(pool_weth=to_wei("1200", QD)))
     try:
         verdict = screen.assess("PONS", POOL, ETH_USD)
         liquidity = next(c for c in verdict.checks if c.name == "liquidity")
@@ -445,8 +447,8 @@ def test_a_collapsing_position_is_recorded_as_a_rug(tmp_path):
     _, ledger, watch = watch_for(tmp_path)
     try:
         ledger.put("positions", {"PONS": "40000"})
-        watch.record_entry("PONS", D("0.0000001"))
-        collapsed = quote_for(price=D("0.00000001"))
+        watch.record_entry("PONS", D("0.00025"))
+        collapsed = quote_for(price=D("0.000025"))
         record = watch.inspect("PONS", collapsed)
         assert record is not None
         assert D(record["drawdown"]) > D("0.5")
@@ -460,8 +462,8 @@ def test_a_rug_is_recorded_once_however_long_the_exit_takes(tmp_path):
     _, ledger, watch = watch_for(tmp_path)
     try:
         ledger.put("positions", {"PONS": "40000"})
-        watch.record_entry("PONS", D("0.0000001"))
-        collapsed = quote_for(price=D("0.00000001"))
+        watch.record_entry("PONS", D("0.00025"))
+        collapsed = quote_for(price=D("0.000025"))
         assert watch.inspect("PONS", collapsed) is not None
         # Still holding some of it on the next observation: same rug, no new row.
         assert watch.inspect("PONS", collapsed) is None
@@ -474,8 +476,8 @@ def test_an_ordinary_drawdown_is_not_a_rug(tmp_path):
     _, ledger, watch = watch_for(tmp_path)
     try:
         ledger.put("positions", {"PONS": "40000"})
-        watch.record_entry("PONS", D("0.0000001"))
-        assert watch.inspect("PONS", quote_for(price=D("0.00000008"))) is None
+        watch.record_entry("PONS", D("0.00025"))
+        assert watch.inspect("PONS", quote_for(price=D("0.0002"))) is None
         assert not ledger.is_blocked("PONS")
     finally:
         ledger.close()
@@ -484,8 +486,8 @@ def test_an_ordinary_drawdown_is_not_a_rug(tmp_path):
 def test_no_position_means_nothing_to_watch(tmp_path):
     _, ledger, watch = watch_for(tmp_path)
     try:
-        watch.record_entry("PONS", D("0.0000001"))
-        assert watch.inspect("PONS", quote_for(price=D("0.000000001"))) is None
+        watch.record_entry("PONS", D("0.00025"))
+        assert watch.inspect("PONS", quote_for(price=D("0.0000025"))) is None
     finally:
         ledger.close()
 
@@ -493,9 +495,9 @@ def test_no_position_means_nothing_to_watch(tmp_path):
 def test_the_entry_reference_is_the_worst_price_paid(tmp_path):
     _, ledger, watch = watch_for(tmp_path)
     try:
-        watch.record_entry("PONS", D("0.0000001"))
-        watch.record_entry("PONS", D("0.00000005"))
-        assert watch.entry_price("PONS") == D("0.0000001")
+        watch.record_entry("PONS", D("0.00025"))
+        watch.record_entry("PONS", D("0.0001"))
+        assert watch.entry_price("PONS") == D("0.00025")
     finally:
         ledger.close()
 

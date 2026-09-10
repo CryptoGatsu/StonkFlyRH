@@ -14,10 +14,10 @@ from stonkflyrh.market import Quote
 from stonkflyrh.reinforcement import reinforcement
 from stonkflyrh.risk import Guard, Veto, realised_volatility
 
-PRICE = D("0.0000001")
+# Memecoin price in USDG; the ledger is dollars, so capital is the stake itself.
+PRICE = D("0.00025")
 ETH_USD = D("2500")
-# $100 of capital at $2500/ETH.
-CAPITAL = D("0.04")
+CAPITAL = D("100")
 
 
 def quote(**changes):
@@ -29,7 +29,7 @@ def quote(**changes):
         18,
         QUOTE_DECIMALS,
         10000,
-        D("0.004"),
+        D("10"),
         D("39604"),
     )
     return dataclasses.replace(q, **changes)
@@ -68,7 +68,7 @@ def test_nonfinite_money(value):
         dict(order_limit_usd="200", capital_usd="150"),
         dict(min_order_usd="20"),
         dict(loss_stop_usd="200"),
-        dict(products=("WETH",)),
+        dict(products=("USDG",)),
         dict(products=("PONS", "PONS")),
         dict(products=("pons",)),
         dict(products=()),
@@ -104,6 +104,7 @@ def test_defaults_match_the_operators_stated_size():
     s = Settings()
     assert s.capital_usd == "100"
     assert s.order_limit_usd == "10"
+    assert (s.quote_symbol, s.quote_decimals) == ("USDG", 6)
     assert s.network == "robinhood-mainnet"
     assert s.screen_enabled and s.adapt_enabled
 
@@ -117,21 +118,30 @@ def test_only_robinhood_chain_is_configurable():
 # -- dollar limits ---------------------------------------------------------
 
 
-def test_limits_convert_from_dollars_at_the_current_reference(env):
+def test_limits_are_the_dollar_settings_because_usdg_is_dollars(env):
     _, _, guard = env
     limits = guard.limits(ETH_USD)
-    assert limits["order_limit"] == D("10") / ETH_USD
-    assert limits["min_order"] == D("1") / ETH_USD
-    # The same dollar limit is fewer WETH when ETH is worth more.
-    assert guard.limits(D("5000"))["order_limit"] < limits["order_limit"]
+    assert limits["order_limit"] == D("10")
+    assert limits["min_order"] == D("1")
+    # ETH moving changes what gas costs, never what a $10 order is.
+    assert guard.limits(D("5000"))["order_limit"] == limits["order_limit"]
 
 
-def test_a_ten_dollar_limit_stays_ten_dollars_when_eth_moves(env):
+def test_a_ten_dollar_order_is_ten_usdg_whatever_eth_does(env):
     s, _, guard = env
     for price in [D("1500"), D("2500"), D("4000")]:
         plan = guard.plan("PONS", "BUY", {"PONS": quote()}, price)
-        assert D(plan["notional_usd"]) == pytest.approx(D("10"), rel=D("0.001"))
+        assert D(plan["notional_usd"]) == D("10")
+        assert int(plan["amount_in_wei"]) == to_wei("10", QUOTE_DECIMALS)
         guard.l.put("last_attempt", 0)
+
+
+def test_gas_is_valued_in_dollars_inside_equity(env):
+    _, ledger, _ = env
+    ledger.put("gas_spent", "0.001")  # ETH
+    quotes = {"PONS": quote()}
+    assert ledger.equity(quotes, D("2500")) == CAPITAL - D("2.5")
+    assert ledger.equity(quotes, D("5000")) == CAPITAL - D("5")
 
 
 # -- the guard -------------------------------------------------------------
@@ -232,8 +242,11 @@ def test_unknown_product_or_side_vetoes(env):
 
 def test_gas_share_veto(env):
     _, _, guard = env
+    # 500k gas at 10 gwei is 0.005 ETH = $12.50 against a $10 order.
     with pytest.raises(Veto, match="Gas cost"):
         guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD, gas_price_wei=10**10)
+    # At 0.1 gwei it is 12.5 cents: fine.
+    guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD, gas_price_wei=10**8)
 
 
 def test_sell_without_position_vetoes(env):
@@ -244,8 +257,7 @@ def test_sell_without_position_vetoes(env):
 
 def test_loss_stop_halts(env):
     _, ledger, guard = env
-    # $25 of a $100 stake, in WETH.
-    ledger.put("cash", str(CAPITAL - D("26") / ETH_USD))
+    ledger.put("cash", str(CAPITAL - D("26")))
     with pytest.raises(Veto, match="Loss stop"):
         guard.check({"PONS": quote()}, time.time(), ETH_USD)
     assert "Loss stop" in ledger.get("halted")
@@ -349,6 +361,7 @@ def test_buy_plan_min_out_honours_slippage(env):
     plan = guard.plan("PONS", "BUY", {"PONS": q}, ETH_USD)
     expected = from_wei(int(plan["amount_in_wei"]), QUOTE_DECIMALS) / q.ask
     assert int(plan["min_out_wei"]) == to_wei(expected * (1 - D(s.slippage)), 18)
+    assert plan["quote_decimals"] == QUOTE_DECIMALS
     assert int(plan["min_out_wei"]) < to_wei(expected, 18)
 
 
@@ -359,7 +372,7 @@ def test_plan_below_minimum_notional_vetoes(tmp_path):
     ledger = Ledger(tmp_path / "small.sqlite", s, "paper", CAPITAL)
     try:
         guard = Guard(s, ledger, tmp_path / "STOP")
-        ledger.put("cash", str(D("0.20") / ETH_USD))  # 20 cents left
+        ledger.put("cash", "0.20")  # 20 cents left
         with pytest.raises(Veto, match="below the configured minimum"):
             guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD)
     finally:
@@ -397,7 +410,7 @@ def test_gas_is_charged_to_equity_but_not_to_cash(env):
     result = buy(env)
     assert int(result["gas_wei"]) > 0
     assert ledger.gas_spent > before_gas
-    assert ledger.equity({"PONS": quote()}) < CAPITAL
+    assert ledger.equity({"PONS": quote()}, ETH_USD) < CAPITAL
 
 
 def test_settlement_is_idempotent_and_immutable(env):
@@ -476,7 +489,7 @@ def test_mode_mismatch_refuses_to_reopen_a_ledger(tmp_path):
 
 
 def test_a_new_ledger_needs_its_starting_balance(tmp_path):
-    with pytest.raises(ValueError, match="starting WETH balance"):
+    with pytest.raises(ValueError, match="starting USDG balance"):
         Ledger(tmp_path / "l.sqlite", Settings(), "paper")
 
 
@@ -538,8 +551,8 @@ def test_provider_invoke_runs_the_guard(env):
 
 @pytest.mark.parametrize(
     "equity,anchor,expected",
-    [("0.05", "0.04", "reward"), ("0.04", "0.05", "aversive"), ("0.05", "0.05", "none")],
+    [("100.10", "100", "reward"), ("99.90", "100", "aversive"), ("100.02", "100", "none")],
 )
 def test_reinforcement_signs(equity, anchor, expected):
-    kind, _ = reinforcement(equity, anchor, "0.00002")
+    kind, _ = reinforcement(equity, anchor, "0.05")
     assert kind == expected

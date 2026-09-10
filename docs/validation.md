@@ -1,6 +1,6 @@
 # Validation status
 
-Recorded while porting the fork on 2026-09-10. **No transaction was sent to Robinhood
+Recorded while porting the fork on 2026-09-10, updated the same day for the USDG quote asset. **No transaction was sent to Robinhood
 Chain, and no RPC endpoint was contacted.** Every chain interaction below runs against an
 in-memory double.
 
@@ -13,8 +13,8 @@ and were not reproduced for this fork.
 | Check | Observed result | What it does not establish |
 | --- | --- | --- |
 | Rug screen and rug watch, 33 tests | A honeypot, a 15% transfer tax, a thin pool, shallow liquidity, an EIP-1967 proxy, a mint/blacklist/fee-setter selector, an unrenounced owner and a pool with one oracle observation are each rejected; a clean token passes all nine checks; a screen that throws rejects; verdicts cache and expire; the screen blocks buys and never sells; a 50% collapse is recorded once, blocklists the token, earns a 2× pulse and tightens thresholds, capped after four rugs | That any real Robinhood Chain token has the bytecode, pool or owner these doubles model |
-| Dollar limits and adaptation, in the 82 execution tests | A $10 order stays $10 at $1,500, $2,500 and $4,000 an ETH; calm history trades full size, choppy history shrinks it, extreme history stops a buy and never a sell; a losing streak triples the cooldown; one drained pool no longer freezes other tokens; the exit from a recorded rug may pay a wide spread | That volatility measured on fixture prices resembles a memecoin's |
-| ETH/USD reference, 18 tests | A fresh Chainlink round prices in dollars; a stale, future, zero or absurd answer stops the run; a stablecoin pool prices from a real swap quote; Chainlink wins when both are configured; no reference refuses to size orders | The feed address on the real chain |
+| Dollar limits and adaptation, in the 82 execution tests | A $10 order is 10 USDG at $1,500, $2,500 and $4,000 an ETH, and gas is subtracted from equity at each; a 10-gwei swap is vetoed against a $10 order and a 0.1-gwei one is not; calm history trades full size, choppy history shrinks it, extreme history stops a buy and never a sell; a losing streak triples the cooldown; one drained pool no longer freezes other tokens; the exit from a recorded rug may pay a wide spread | That volatility measured on fixture prices resembles a memecoin's |
+| ETH/USD reference, 16 tests | Used only to value gas: a fresh Chainlink round prices in dollars; a stale, future, zero or absurd answer stops the run; the WETH→USDG pool prices from a real swap quote and is the default; no reference refuses to run | The WETH/USDG pool on the real chain |
 | Posting to X, 20 tests | Fills compose within 280 characters with the link's fixed cost reserved; holds and vetoes are not posted; the OAuth 1.0a header is deterministic and signed; posts are drafted without credentials, throttled, never repeated, and a failed send records only the exception type | That X accepts the signature; no request was sent |
 | Fees, 15 tests | Accrual is idempotent, rounds down, survives reopen; outstanding tracks payouts and never goes negative; the default fee is 0 bps | That a sweep reaches the fee wallet on a real chain |
 | Quoting, 22 tests | Both legs are priced at the run's own order size; a 1% pool shows an ~2% round trip; an empty pool is an error, not a zero price; oracle seeding falls back to a flat seed and records that it did | That any particular Robinhood Chain pool prices this way |
@@ -30,8 +30,10 @@ and were not reproduced for this fork.
   connectome in this environment. The decoder, plasticity rule and reinforcement pathway
   are upstream code carried over unchanged, and the trade-side interface they feed was
   tested with a stub controller only.
-- **No address was verified against a live chain.** `chain verify` and the rug screen
-  have never been pointed at chain 4663. The screen's selector scan, proxy check and
+- **No address was verified against a live chain.** The Uniswap and USDG addresses in
+  `tokens.example.json` come from Uniswap's deployment records and Blockscout's listing,
+  not from a call this repository made; USDG's 6 decimals are assumed from the Ethereum
+  deployment. `chain verify` and the rug screen have never been pointed at chain 4663. The screen's selector scan, proxy check and
   two-size tax measurement are exercised against a pool model, not a real memecoin. The
   registry ships empty for that reason.
 - **No post was sent to X.** The signature is checked for shape and determinism, not

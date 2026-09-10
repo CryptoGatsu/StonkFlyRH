@@ -1,33 +1,32 @@
 {
   "_comment": [
-    "Contract registry for StonkFlyRH. Copy to tokens.json and fill in.",
-    "No address is shipped in this repository. Look each one up yourself on the",
-    "Robinhood Chain explorer and on the Uniswap deployments page, then run",
-    "`python -m stonkflyrh chain verify` — it refuses any address that holds no",
-    "code, a router and quoter that disagree about their factory, a token whose",
-    "on-chain symbol or decimals differ from what you wrote here, and any pair",
-    "with no pool at the configured fee tier.",
-    "Dollar limits need an ETH/USD reference: 'eth_usd_feed' is a Chainlink",
-    "aggregator (preferred); 'stable' prices a WETH probe through a stablecoin",
-    "pool via the same quoter instead. USDG is the chain's settlement stablecoin.",
-    "pool_fee is the Uniswap v3 tier in hundredths of a bip: 500, 3000 or 10000.",
-    "A Pons launch graduates into a 1% pool with permanently locked liquidity."
+    "Contract registry for StonkFlyRH. Copy to tokens.json.",
+    "The Uniswap addresses below are Robinhood Chain (4663) deployments as listed in",
+    "Uniswap's own deployment records (github.com/Uniswap/contracts, deployments/4663.md,",
+    "and sdk-core's CHAIN_TO_ADDRESSES_MAP), which agree with each other. USDG is the",
+    "address Blockscout lists for Global Dollar. They were NOT confirmed against the",
+    "chain from inside this repository: run `python -m stonkflyrh chain verify` before",
+    "any run. It refuses an address with no code, a router and quoter that disagree",
+    "about their factory, a token whose on-chain symbol or decimals differ from this",
+    "file, and any pair with no pool at its fee tier. Check them on",
+    "robinhoodchain.blockscout.com yourself as well.",
+    "The quote asset is USDG (6 decimals — verify confirms). Every memecoin is traded",
+    "against it, so dollar limits need no conversion. 'weth' is only used to value gas.",
+    "Memecoin addresses are yours to fill in. pool_fee is the Uniswap v3 tier in",
+    "hundredths of a bip: 500, 3000 or 10000. A Pons launch graduates into a 1% pool."
   ],
   "robinhood-mainnet": {
     "quote": {
-      "symbol": "WETH",
-      "address": "0x0000000000000000000000000000000000000000",
-      "decimals": 18
-    },
-    "router": "0x0000000000000000000000000000000000000000",
-    "quoter": "0x0000000000000000000000000000000000000000",
-    "eth_usd_feed": "0x0000000000000000000000000000000000000000",
-    "stable": {
       "symbol": "USDG",
-      "address": "0x0000000000000000000000000000000000000000",
-      "decimals": 6,
-      "pool_fee": 500
+      "address": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      "decimals": 6
     },
+    "weth": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+    "weth_pool_fee": 500,
+    "router": "0xcaf681a66d020601342297493863e78c959e5cb2",
+    "quoter": "0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7",
+    "factory": "0x1f7d7550b1b028f7571e69a784071f0205fd2efa",
+    "eth_usd_feed": null,
     "tokens": {
       "PONS": {
         "address": "0x0000000000000000000000000000000000000000",
@@ -38,13 +37,13 @@
   },
   "robinhood-testnet": {
     "quote": {
-      "symbol": "WETH",
+      "symbol": "USDG",
       "address": "0x0000000000000000000000000000000000000000",
-      "decimals": 18
+      "decimals": 6
     },
+    "weth": "0x0000000000000000000000000000000000000000",
     "router": "0x0000000000000000000000000000000000000000",
     "quoter": "0x0000000000000000000000000000000000000000",
-    "eth_usd_feed": "0x0000000000000000000000000000000000000000",
     "tokens": {}
   }
 }

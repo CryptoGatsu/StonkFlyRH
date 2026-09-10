@@ -17,9 +17,9 @@ reputation service, no allowlist, no score from anywhere else.
 | `upgradeable` | EIP-1967 implementation slot | non-zero: the contract behind the address can be swapped |
 | `owner_levers` | PUSH4 immediates in the runtime bytecode | a `mint`, `blacklist`/`pause`/trading toggle, or fee-setter selector is present |
 | `ownership` | `owner()` if the token has one | not the zero address |
-| `liquidity` | WETH balance of the pool × 2 × ETH/USD | below the floor (default $25,000) |
+| `liquidity` | USDG balance of the pool × 2 | below the floor (default $25,000) |
 | `pool_history` | `slot0().observationCardinality` | fewer than 4 oracle observations — the pool is brand new |
-| `sellable` | quoter, token → WETH | the sell leg returns nothing: a honeypot |
+| `sellable` | quoter, token → USDG | the sell leg returns nothing: a honeypot |
 | `transfer_tax` | round trip of a tiny probe, minus twice the pool fee, halved | above the ceiling (default 5% per side) |
 | `price_impact` | round trip at the run's order size minus the tiny probe's | above the ceiling (default 3%) |
 

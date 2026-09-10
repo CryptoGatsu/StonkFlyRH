@@ -5,12 +5,12 @@ import re
 from dataclasses import asdict, dataclass
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 
-# Robinhood Chain memecoins trade against wrapped ETH, so the ledger is
-# denominated in WETH. Limits are configured in dollars and converted every tick
-# from the chain's own ETH/USD reference, because a fixed WETH cap silently
-# becomes a different dollar cap as ETH moves.
-QUOTE_SYMBOL = "WETH"
-QUOTE_DECIMALS = 18
+# Memecoins are traded against USDG, Robinhood Chain's settlement stablecoin, so
+# the ledger is in dollars already: a $10 order is 10 USDG, with no conversion
+# to drift. Gas is still ETH; the ETH/USD reference exists to value it.
+QUOTE_SYMBOL = "USDG"
+QUOTE_DECIMALS = 6
+GAS_DECIMALS = 18
 
 # Blast-radius caps. A run cannot be configured past these.
 MAX_CAPITAL_USD = Decimal("1000")
@@ -55,6 +55,8 @@ class Settings:
 
     network: str = "robinhood-mainnet"
     products: tuple[str, ...] = ("PONS",)
+    quote_symbol: str = QUOTE_SYMBOL
+    quote_decimals: int = QUOTE_DECIMALS
 
     # -- size, in dollars ---------------------------------------------------
     capital_usd: str = "100"
@@ -118,9 +120,11 @@ class Settings:
             not self.products
             or len(set(self.products)) != len(self.products)
             or not all(isinstance(p, str) and SYMBOL.match(p) for p in self.products)
-            or QUOTE_SYMBOL in self.products
+            or self.quote_symbol in self.products
         ):
             raise ValueError("Products must be distinct memecoin symbols, not the quote asset")
+        if not SYMBOL.match(self.quote_symbol) or not 0 <= self.quote_decimals <= 36:
+            raise ValueError("Quote asset needs a symbol and plausible decimals")
         if len(self.products) > 8:
             raise ValueError("At most 8 products per run")
         if not 0 < D(self.capital_usd) <= MAX_CAPITAL_USD:

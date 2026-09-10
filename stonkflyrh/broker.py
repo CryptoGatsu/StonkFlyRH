@@ -15,7 +15,7 @@ import os
 import time
 
 from .chain import ROUTER_ABI, checksum, hex32
-from .config import D, QUOTE_DECIMALS, from_wei, to_wei
+from .config import D, from_wei, to_wei
 from .fees import gross_fee_wei
 from .risk import Veto
 
@@ -69,19 +69,18 @@ class PaperBroker:
 
     def _fill(self, p):
         amount_in = int(p["amount_in_wei"])
+        qd = p["quote_decimals"]
         gas_wei = self._gas_wei()
         if p["side"] == "BUY":
             quote_wei = amount_in
             base_wei = to_wei(
-                D(amount_in) / (D(10) ** QUOTE_DECIMALS) / D(p["observed_ask"]),
-                p["base_decimals"],
+                D(amount_in) / (D(10) ** qd) / D(p["observed_ask"]), p["base_decimals"]
             )
             fee_wei = int(p["planned_fee_wei"])
         else:
             base_wei = amount_in
             quote_wei = to_wei(
-                D(amount_in) / (D(10) ** p["base_decimals"]) * D(p["observed_bid"]),
-                QUOTE_DECIMALS,
+                D(amount_in) / (D(10) ** p["base_decimals"]) * D(p["observed_bid"]), qd
             )
             fee_wei = gross_fee_wei(quote_wei, p["fee_bps"])
         self.l.settle(
@@ -159,8 +158,8 @@ class RobinhoodChainBroker:
     def expected(self):
         held = self.l.positions
         return {
-            # Wrapped ETH on hand is tradable cash plus fees awaiting a sweep.
-            "quote": to_wei(self.l.cash, QUOTE_DECIMALS) + self.unswept_fees(),
+            # USDG on hand is tradable cash plus fees awaiting a sweep.
+            "quote": to_wei(self.l.cash, self.registry.quote_decimals) + self.unswept_fees(),
             "base": {
                 p: to_wei(held.get(p, D(0)), self.registry.token(p)["decimals"])
                 for p in self.s.products
@@ -174,8 +173,8 @@ class RobinhoodChainBroker:
         # A few units of tolerance absorb truncation in the wei conversions.
         if abs(actual_quote - expected["quote"]) > 4:
             raise RuntimeError(
-                "Wrapped ETH balance does not match the ledger; stop and reconcile "
-                "rather than treat a transfer as profit"
+                "USDG balance does not match the ledger; stop and reconcile rather "
+                "than treat a transfer as profit"
             )
         for product, want in expected["base"].items():
             entry = self.registry.token(product)
@@ -207,20 +206,17 @@ class RobinhoodChainBroker:
                     .call()
                 ):
                     raise RuntimeError(
-                        "Start from a wallet holding only WETH and gas ETH"
+                        "Start from a wallet holding only USDG and gas ETH"
                     )
-            if eth_usd is None:
-                raise RuntimeError("Live preflight needs the ETH/USD reference")
-            from .pricing import usd_to_weth
-
-            cap = to_wei(usd_to_weth(self.s.capital_usd, eth_usd), QUOTE_DECIMALS)
+            qd = self.registry.quote_decimals
+            cap = to_wei(self.s.capital_usd, qd)
             if not 0 < quote <= cap:
                 raise RuntimeError(
-                    f"Fund the fly wallet with 0 < WETH <= the configured "
-                    f"${self.s.capital_usd} cap (about {from_wei(cap, QUOTE_DECIMALS)} WETH)"
+                    f"Fund the fly wallet with 0 < USDG <= the configured "
+                    f"${self.s.capital_usd} cap"
                 )
             with self.l.transaction():
-                held = D(quote) / (D(10) ** QUOTE_DECIMALS)
+                held = from_wei(quote, qd)
                 for k in ["cash", "initial_cash", "anchor"]:
                     self.l.put(k, str(held))
                 self.l.put("live_initialized", True)

@@ -1,23 +1,21 @@
-"""The ETH/USD reference that turns dollar limits into WETH amounts.
+"""The ETH/USD reference, used to value gas in the run's dollar ledger.
 
-Limits are configured in dollars because that is how a person thinks about
-risk: a $10 order should stay a $10 order when ETH moves 30%. The ledger stays
-denominated in WETH, which is what the wallet actually holds; only the limits
-are converted, and they are reconverted every observation.
-
-Robinhood Chain carries Chainlink feeds, so that is the primary source. A run
-can instead price against a stablecoin pool through the same quoter it trades
-with. Either way a stale, zero or absurd answer stops the run rather than
-silently resizing every order.
+Trades settle in USDG, so a $10 order is 10 USDG and needs no conversion. Gas
+is native ETH, and equity should feel it, so the run needs a dollar figure for
+ETH. The default source is the run's own quoter: sell a probe of WETH into the
+USDG pool and read what comes back — an execution price, not an index, which is
+the right number for what gas actually costs to replace. A Chainlink feed is
+accepted when the registry names one. A stale, zero or absurd answer stops the
+run rather than mis-valuing every observation's gas.
 """
 
 import time
 
 from .chain import CHAINLINK_ABI, checksum
-from .config import D, QUOTE_DECIMALS, from_wei, to_wei
+from .config import D, GAS_DECIMALS, from_wei, to_wei
 
-# An ETH price outside this band means the feed is wrong, not that the market
-# moved. Sizing every order off a bad number is worse than not trading.
+# An ETH price outside this band means the source is wrong, not that the market
+# moved.
 MIN_PLAUSIBLE_USD = D("50")
 MAX_PLAUSIBLE_USD = D("100000")
 MAX_FEED_AGE_SECONDS = 3600
@@ -48,8 +46,7 @@ class UsdOracle:
         age = now - int(updated_at)
         if not -60 <= age <= self.max_age:
             raise RuntimeError(f"ETH/USD feed is stale or ahead of us by {age:.0f}s")
-        price = D(int(answer)) / (D(10) ** self.decimals)
-        return check_plausible(price)
+        return check_plausible(D(int(answer)) / (D(10) ** self.decimals))
 
     def report(self):
         return {
@@ -61,38 +58,26 @@ class UsdOracle:
 
 
 class StablePoolOracle:
-    """ETH/USD from selling a probe of WETH into a stablecoin pool.
+    """ETH/USD from selling a probe of WETH into the USDG pool via the quoter."""
 
-    The fallback for a run with no feed configured. It is a real execution
-    price rather than an index, which is the right number for sizing an order
-    that will be executed, but it moves with that one pool's depth.
-    """
+    source = "weth-usdg-pool"
 
-    source = "stable-pool"
-
-    def __init__(self, market, stable):
+    def __init__(self, market, weth, quote_decimals, pool_fee=500, probe_weth="0.01"):
         self.market = market
-        self.stable = dict(stable)
-        self.address = checksum(stable["address"])
-        self.decimals = int(stable["decimals"])
-        self.fee = int(stable.get("pool_fee", 500))
-        self.probe = D(stable.get("probe_weth", "0.01"))
+        self.weth = checksum(weth)
+        self.quote_decimals = int(quote_decimals)
+        self.fee = int(pool_fee)
+        self.probe = D(probe_weth)
 
     def eth_usd(self, now=None):
-        probe_wei = to_wei(self.probe, QUOTE_DECIMALS)
+        probe_wei = to_wei(self.probe, GAS_DECIMALS)
         out = self.market.quote_call(
-            self.market.registry.quote_address, self.address, probe_wei, self.fee
+            self.weth, self.market.registry.quote_address, probe_wei, self.fee
         )
-        price = from_wei(out, self.decimals) / self.probe
-        return check_plausible(price)
+        return check_plausible(from_wei(out, self.quote_decimals) / self.probe)
 
     def report(self):
-        return {
-            "source": self.source,
-            "stable": self.stable["symbol"],
-            "address": self.address,
-            "pool_fee": self.fee,
-        }
+        return {"source": self.source, "weth": self.weth, "pool_fee": self.fee}
 
 
 class FixtureOracle:
@@ -116,29 +101,25 @@ def check_plausible(price):
     return price
 
 
-def usd_to_weth(usd, eth_usd):
-    """Dollars to WETH at the current reference."""
-    eth_usd = D(eth_usd)
-    if eth_usd <= 0:
-        raise ValueError("Non-positive ETH price")
-    return D(usd) / eth_usd
-
-
-def weth_to_usd(weth, eth_usd):
-    return D(weth) * D(eth_usd)
+def gas_to_usd(gas_wei, eth_usd):
+    """Native gas spent, in dollars."""
+    return from_wei(gas_wei, GAS_DECIMALS) * D(eth_usd)
 
 
 def build(client, registry, market=None, fixture=False):
-    """Pick the reference this run will size against."""
+    """Pick the reference this run will value gas with."""
     if fixture:
         return FixtureOracle()
     feed = getattr(registry, "eth_usd_feed", None)
     if feed:
         return UsdOracle(client, feed)
-    stable = getattr(registry, "stable", None)
-    if stable and market is not None:
-        return StablePoolOracle(market, stable)
+    weth = getattr(registry, "weth", None)
+    if weth and market is not None:
+        return StablePoolOracle(
+            market, weth, registry.quote_decimals, getattr(registry, "weth_pool_fee", 500)
+        )
     raise RuntimeError(
-        "No ETH/USD reference. Add 'eth_usd_feed' (a Chainlink aggregator) or "
-        "'stable' to the registry: dollar limits cannot be sized without one."
+        "No ETH/USD reference. Add 'weth' (priced through the USDG pool) or "
+        "'eth_usd_feed' (a Chainlink aggregator) to the registry: gas cannot be "
+        "valued without one."
     )

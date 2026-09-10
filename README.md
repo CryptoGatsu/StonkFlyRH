@@ -8,8 +8,8 @@ them for rugs first, and posts what it does to X. A fork of
 Actual neural output, actual on-chain swaps, a live website. Profitable learning has
 not been demonstrated.
 
-**How it works:** Uniswap v3 quotes from Robinhood Chain (chain id 4663) become an RGB
-chart. It stimulates 3,335 brightness inputs and 811 R8 color inputs in the retained
+**How it works:** Uniswap v3 quotes from Robinhood Chain (chain id 4663), priced in
+**USDG** — the chain's dollar stablecoin — become an RGB chart. It stimulates 3,335 brightness inputs and 811 R8 color inputs in the retained
 **MaleCNS v1.0 graph: 166,700 neurons, 25.6 million connections**. A fixed neural readout
 proposes buy, sell or hold. A guarded action provider checks the dollar limits and the
 rug screen, then sends one `exactInputSingle` swap from the fly wallet.
@@ -45,9 +45,9 @@ worker's log and ledger, holds no key, and can place no trade.
 | Loss stop | $25 — stops new orders, does not liquidate |
 | Orders | 24 a day, 60 s apart, 3× longer after a losing streak |
 
-Dollar limits are reconverted every observation from the chain's ETH/USD reference
-(Chainlink, or a USDG pool through the same quoter), so $10 stays $10 when ETH moves.
-The ledger itself is WETH, which is what the wallet holds.
+Every memecoin is traded against USDG, so the ledger is already in dollars and a $10
+order is 10 USDG — nothing to convert, nothing to drift. Gas is still ETH; it is valued
+into equity by selling a probe of WETH into the USDG pool through the same quoter.
 
 ## The rug screen
 
@@ -81,9 +81,11 @@ brain state go in `runs/paper/`. Ctrl-C stops it; the same command resumes.
 
 ## Real swaps
 
-**No contract address ships in this repository.** Copy `tokens.example.json` to
-`tokens.json`, fill in the Uniswap router and quoter, WETH, an ETH/USD reference and
-the tokens you want, then check it against the chain:
+`tokens.example.json` carries the Robinhood Chain Uniswap v3 addresses from Uniswap's
+own deployment records (router `0xcaf6…5cb2`, quoter `0x33e8…a9e7`, factory
+`0x1f7d…2efa`), the USDG address Blockscout lists (`0x5fc5…d168`) and WETH9. They were
+not confirmed against the chain from inside this repository — copy the file to
+`tokens.json`, add the memecoins you want, and let the chain check every one of them:
 
 ```sh
 python -m stonkflyrh chain verify --products PONS
@@ -91,8 +93,8 @@ python -m stonkflyrh screen --products PONS         # what the rug screen thinks
 ```
 
 Import the fly wallet — the key must derive `0x68e8…3201` or nothing is written — fund
-it with **at most $100 of WETH** plus a little ETH for gas, copy `.env.example` to
-`.env`, then:
+it with **at most 100 USDG** plus a little ETH for gas, copy `.env.example` to `.env`,
+then:
 
 ```sh
 python -m stonkflyrh wallet import
