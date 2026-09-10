@@ -306,6 +306,73 @@ def encode_exact_in_path(keys, currency_in, amount_in, min_out):
     return bytes([V4_SWAP]), [encode(["bytes", "bytes[]"], [actions, params])], currency_out
 
 
+# Custom errors a v4 swap through the Universal Router can surface, by name, so
+# a revert reads as a reason instead of four hex bytes.
+REVERT_SIGNATURES = (
+    "V4TooLittleReceived(uint256,uint256)",
+    "V4TooMuchRequested(uint256,uint256)",
+    "DeadlinePassed(uint256)",
+    "TransactionDeadlinePassed()",
+    "ExecutionFailed(uint256,bytes)",
+    "InvalidCommandType(uint256)",
+    "InsufficientToken()",
+    "InsufficientETH()",
+    "ContractLocked()",
+    "NotPoolManager()",
+    "InputLengthMismatch()",
+    "UnsupportedAction(uint256)",
+    "DeltaNotPositive(address)",
+    "DeltaNotNegative(address)",
+    "AllowanceExpired(uint256)",
+    "InsufficientAllowance(uint256)",
+    "InvalidNonce()",
+    "CurrencyNotSettled()",
+    "PoolNotInitialized()",
+    "HookAddressNotValid(address)",
+    "InvalidHookResponse()",
+    "HookCallFailed()",
+    "PriceLimitAlreadyExceeded(uint160,uint160)",
+    "PriceLimitOutOfBounds(uint160)",
+    "SwapAmountCannotBeZero()",
+    "ManagerLocked()",
+    "Error(string)",
+    "Panic(uint256)",
+)
+
+
+def revert_names():
+    from eth_utils import keccak
+
+    return {"0x" + keccak(text=sig).hex()[:8]: sig for sig in REVERT_SIGNATURES}
+
+
+def describe_revert(exc):
+    """A readable reason for a ContractLogicError: the named custom error when
+    the selector is known, the revert string when there is one, else the raw
+    data. Nothing here is secret; it is what the chain answered."""
+    data = getattr(exc, "data", None)
+    text = getattr(exc, "message", None) or (str(exc.args[0]) if getattr(exc, "args", None) else str(exc))
+    if isinstance(data, dict):
+        data = data.get("data") or data.get("message")
+    if isinstance(data, (bytes, bytearray)):
+        data = "0x" + bytes(data).hex()
+    if isinstance(data, str) and data.startswith("0x") and len(data) >= 10:
+        selector = data[:10].lower()
+        name = revert_names().get(selector)
+        if name == "Error(string)":
+            try:
+                from eth_abi import decode
+
+                (message,) = decode(["string"], bytes.fromhex(data[10:]))
+                return f"reverted: {message}"
+            except Exception:
+                pass
+        if name:
+            return f"reverted with {name.split('(')[0]} ({data[:74]})"
+        return f"reverted with unknown error {selector} ({data[:74]})"
+    return f"reverted: {text[:160]}" if text else "reverted without a reason"
+
+
 class V4Venue:
     """Everything the run does against a v4 pool, given its PoolKey."""
 

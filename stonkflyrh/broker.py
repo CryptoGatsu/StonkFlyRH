@@ -22,6 +22,13 @@ from .risk import Veto
 LIVE_OPT_IN = "I_ACCEPT_REAL_ONCHAIN_TRADES"
 
 
+def _is_revert(exc):
+    """A contract said no (ContractLogicError and its relatives), as opposed to
+    the network failing to answer."""
+    names = {c.__name__ for c in type(exc).__mro__}
+    return bool(names & {"ContractLogicError", "ContractCustomError", "ContractPanicError"})
+
+
 class BroadcastFailed(RuntimeError):
     """The node would not accept a transaction that is not an order (an
     approval). Nothing is booked; the next attempt simply tries again."""
@@ -374,7 +381,14 @@ class RobinhoodChainBroker:
             )
             call = self.router.functions.exactInputSingle(params)
             # Simulate against current state; a revert here never costs gas.
-            simulated = int(call.call({"from": self.address}))
+            try:
+                simulated = int(call.call({"from": self.address}))
+            except Exception as e:
+                if not _is_revert(e):
+                    raise
+                from .v4 import describe_revert
+
+                raise Veto(f"swap simulation {describe_revert(e)}") from e
             if simulated < min_out:
                 raise Veto("Simulated output below the slippage bound")
             if time.time() - p["quote_timestamp"] > self.s.max_quote_age:
@@ -439,7 +453,16 @@ class RobinhoodChainBroker:
             deadline = int(time.time()) + 120
             call = self.v4.swap_call(route, token_in, amount_in, min_out, deadline)
             # execute() returns nothing; a revert here is the signal, and costs no gas.
-            call.call({"from": self.address})
+            try:
+                call.call({"from": self.address})
+            except Exception as e:
+                if not _is_revert(e):
+                    raise
+                from .v4 import describe_revert
+
+                # The pool or router refused this swap at this moment: a
+                # decision about this order, not a fault in the run.
+                raise Veto(f"swap simulation {describe_revert(e)}") from e
             if time.time() - p["quote_timestamp"] > self.s.max_quote_age:
                 raise Veto("Quote expired during simulation")
             before_submit(p)

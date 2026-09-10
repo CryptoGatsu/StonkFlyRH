@@ -130,3 +130,22 @@ def test_selling_reverses_the_route():
     venue.quote_path = lambda keys, cin, amt: seen.setdefault("keys", keys) or 1
     venue.quote_call_for(route)(C, A, 5, 0)
     assert seen["keys"] == list(reversed(route))
+
+
+def test_a_revert_is_described_by_name_or_message():
+    from web3.exceptions import ContractLogicError
+
+    from stonkflyrh.v4 import describe_revert, revert_names
+
+    names = revert_names()
+    too_little = next(sel for sel, sig in names.items() if sig.startswith("V4TooLittleReceived"))
+    e = ContractLogicError("execution reverted", data=too_little + "00" * 64)
+    assert describe_revert(e).startswith("reverted with V4TooLittleReceived")
+    from eth_abi import encode
+
+    err = next(sel for sel, sig in names.items() if sig == "Error(string)")
+    e = ContractLogicError("execution reverted", data=err + encode(["string"], ["Pons: paused"]).hex())
+    assert describe_revert(e) == "reverted: Pons: paused"
+    e = ContractLogicError("execution reverted", data="0xdeadbeef")
+    assert "unknown error 0xdeadbeef" in describe_revert(e)
+    assert describe_revert(ContractLogicError("execution reverted: no data")).startswith("reverted: execution reverted")

@@ -865,6 +865,11 @@ def cmd_run(a, parser):
             else "External dependency error; review the RPC endpoint and wallet state.",
             "locations": [f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in frames],
         }
+        if "ContractLogicError" in {c.__name__ for c in type(e).__mro__}:
+            # What the chain answered is not a secret and is the whole diagnosis.
+            from .v4 import describe_revert
+
+            diagnostic["revert"] = describe_revert(e)
         (out / "error.json").write_text(json.dumps(diagnostic, indent=2) + "\n")
         print(
             f"Stopped safely: {type(e).__name__}. Inspect local state and reconcile "

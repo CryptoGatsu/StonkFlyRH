@@ -418,3 +418,34 @@ def test_an_approval_the_node_refuses_is_a_transient_failure_with_the_reason(tmp
         assert getattr(b, "_next_nonce", None) is None      # nothing was broadcast
     finally:
         ledger.close()
+
+
+def test_a_swap_the_pool_refuses_in_simulation_is_a_veto_not_a_halt(tmp_path):
+    from web3.exceptions import ContractLogicError
+
+    from stonkflyrh.risk import Veto
+
+    client = FakeClient(quote_wei=10**8)
+    b, ledger, guard = broker(tmp_path, client)
+    b.routes = {"PONS": [{"currency0": WETH, "currency1": TOKEN, "fee": 30000, "tickSpacing": 60,
+                          "hooks": "0x" + "00" * 20}]}
+
+    class Refusing:
+        def call(self, _tx):
+            raise ContractLogicError("execution reverted", data="0x8b063d73" + "00" * 64)
+
+    b.v4 = type("V4", (), {
+        "permit2_address": "0x" + "22" * 20,
+        "permit2_allowance": staticmethod(lambda owner, token: (2**160 - 1, 2**48 - 1)),
+        "swap_call": staticmethod(lambda *a, **k: Refusing()),
+    })()
+    b._ensure_permit2 = lambda token, amount, gas_price: 0
+    b.verify_balances = lambda: None
+    b.balances = lambda product: {"quote": 10**8, "base": 0, "gas": 10**16}
+    try:
+        plan = plan_for(guard, ledger, "BUY")
+        with pytest.raises(Veto, match="swap simulation reverted with V4TooLittleReceived"):
+            b.execute(plan, guard.before_submit)
+        assert not ledger.pending()                        # the order is REJECTED, not open
+    finally:
+        ledger.close()
