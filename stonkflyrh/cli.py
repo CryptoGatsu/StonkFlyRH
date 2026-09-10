@@ -754,6 +754,10 @@ def cmd_run(a, parser):
                 return
         result = broker.preflight(eth_usd)
         print(json.dumps({**result, "eth_usd": str(eth_usd)}), flush=True)
+        stale = out / "error.json"
+        if stale.exists() and not ledger.get("halted"):
+            # The failure it describes has been resolved; keep it for the record.
+            stale.replace(out / "error.previous.json")
         if settings.donations_enabled:
             # After preflight: a fresh live ledger only learns its real starting
             # balance there, and the operator's units must equal it.
@@ -895,6 +899,10 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             if settings.discovery_enabled and screen is not None
             else None
         )
+        if discovery is not None:
+            healed = discovery.heal(time.time())
+            if healed and healed.get("cleared_stale_rejections"):
+                print(json.dumps({"discovery_healed": healed}), flush=True)
 
     provenance = {
         "settings": dataclasses.asdict(settings),

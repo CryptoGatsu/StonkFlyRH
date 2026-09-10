@@ -386,3 +386,23 @@ def test_an_unknown_pair_asset_is_probed_for_a_bridge_once_in_a_while(tmp_path):
         assert ledger.universe()["WOOF"]["via"] == GOOGL[:8]
     finally:
         ledger.close()
+
+
+def test_rejections_from_the_broken_age_check_are_forgotten_and_rescanned(tmp_path):
+    logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
+    ledger, _, _, disc = build(tmp_path, logs, {COIN: ("WOOF", 18)})
+    try:
+        now = time.time()
+        ledger.mark_candidate(COIN, "pool_age: pool creation block unknown; liquidity: ...", now)
+        ledger.mark_candidate(GOOGL, "ownership: owner is still 0xabc", now)
+        ledger.put("discovery_block", 5000)
+        report = disc.heal(now)
+        assert report["cleared_stale_rejections"] == 1
+        assert ledger.seen_candidates() == [GOOGL]              # a real judgement stays
+        assert ledger.get("discovery_block") == 5000 - Settings().discovery_lookback_blocks or ledger.get("discovery_block") == 0
+        assert disc.heal(now + 1) is None                        # once only
+        # The rewound scan sees the pool again and, with the fixed check, admits it.
+        scan = disc.scan(now + 2, ETH_USD)
+        assert [a["symbol"] for a in scan["added"]] == ["WOOF"]
+    finally:
+        ledger.close()

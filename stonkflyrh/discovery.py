@@ -369,6 +369,33 @@ class PoolDiscovery:
                     report["rejected"].append(outcome)
             self.l.put("pending_candidates", (batch[i + 1:] + rest + waiting + retried)[-500:])
 
+    # Rejection texts produced by checks that were later found to be broken.
+    # A candidate turned away for one of these was never really judged.
+    STALE_REJECTIONS = ("pool creation block unknown",)
+
+    def heal(self, now):
+        """Forget rejections that a since-fixed check produced, and rewind the
+        scan so those pools are looked at again with the corrected screen.
+        Runs once per ledger; a run that never hit the bug does nothing."""
+        if self.l.get("healed_stale_rejections"):
+            return None
+        cleared = 0
+        for text in self.STALE_REJECTIONS:
+            cleared += self.l.db.execute(
+                "DELETE FROM candidates WHERE outcome LIKE ?", (f"%{text}%",)
+            ).rowcount
+        report = {"at": now, "cleared_stale_rejections": cleared}
+        if cleared:
+            head = int(self.client.w3.eth.block_number)
+            start = max(0, head - int(self.s.discovery_lookback_blocks))
+            with self.l.transaction():
+                self.l.put("discovery_block", start)
+                self.l.put("discovery_backlog", head - start)
+            report["rescan_from_block"] = start
+        self.l.put("healed_stale_rejections", True)
+        self.l.record_event("migration", report)
+        return report
+
     def due(self, now):
         # With a backlog still to cover, or candidates still queued, scan again
         # soon rather than in ten minutes.
