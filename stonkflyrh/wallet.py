@@ -24,15 +24,24 @@ from pathlib import Path
 
 KEYSTORE_ENV = "STONKFLYRH_KEYSTORE"
 PASSWORD_ENV = "STONKFLYRH_KEYSTORE_PASSWORD"
-ROLES = ("trading",)
+ROLES = ("trading", "deployer")
 
 # The fly wallet. An imported key must derive this address unless the operator
 # overrides it with STONKFLYRH_FLY_WALLET.
 FLY_WALLET = "0x68e82397455232f6F726E44ad1c980C6C99B3201"
+# The deployer wallet: holds the operator's coin and signs airdrops, nothing
+# else. STONKFLYRH_DEPLOYER_WALLET overrides it.
+DEPLOYER_WALLET = "0x89a813e1Eb38d38EEBd1Fb91EdD464E6fCC22f25"
+
+EXPECTED = {
+    "trading": ("STONKFLYRH_FLY_WALLET", FLY_WALLET),
+    "deployer": ("STONKFLYRH_DEPLOYER_WALLET", DEPLOYER_WALLET),
+}
 
 
-def expected_address():
-    configured = os.environ.get("STONKFLYRH_FLY_WALLET") or FLY_WALLET
+def expected_address(role="trading"):
+    env, default = EXPECTED[role]
+    configured = os.environ.get(env) or default
     if not configured:
         return None
     from .chain import checksum
@@ -104,23 +113,26 @@ def import_key(private_key, role="trading", path=None, overwrite=False, expect=N
     if len(key) != 64 or any(c not in "0123456789abcdefABCDEF" for c in key):
         raise RuntimeError("A private key is 64 hex characters, optionally 0x-prefixed")
     account = Account.from_key(bytes.fromhex(key))
-    want = expect if expect is not None else expected_address()
+    want = expect if expect is not None else expected_address(role)
     if want and to_checksum_address(account.address) != to_checksum_address(want):
         raise RuntimeError(
-            f"That key derives {account.address}, not the expected fly wallet {want}. "
+            f"That key derives {account.address}, not the expected "
+            f"{'fly' if role == 'trading' else role} wallet {want}. "
             "Nothing was written."
         )
     return _write(account, role, path, overwrite)
 
 
-def read_key_interactively():
-    if os.environ.get("STONKFLYRH_PRIVATE_KEY"):
-        return os.environ["STONKFLYRH_PRIVATE_KEY"]
+KEY_ENV = {"trading": "STONKFLYRH_PRIVATE_KEY", "deployer": "STONKFLYRH_DEPLOYER_PRIVATE_KEY"}
+
+
+def read_key_interactively(role="trading"):
+    env = KEY_ENV[role]
+    if os.environ.get(env):
+        return os.environ[env]
     if not os.isatty(0):
-        raise RuntimeError(
-            "Paste the key interactively, or set STONKFLYRH_PRIVATE_KEY for this one command"
-        )
-    return getpass.getpass("Fly wallet private key (not echoed): ")
+        raise RuntimeError(f"Paste the key interactively, or set {env} for this one command")
+    return getpass.getpass(f"{role.capitalize()} wallet private key (not echoed): ")
 
 
 def address(role="trading", path=None):
@@ -146,10 +158,11 @@ def load(role="trading", path=None):
         raise RuntimeError(f"{target} is group/world readable; chmod 600 it")
     key = Account.decrypt(json.loads(target.read_text()), _password(role))
     account = Account.from_key(key)
-    want = expected_address()
+    want = expected_address(role)
     if want and account.address != want:
         raise RuntimeError(
-            f"Keystore holds {account.address}, not the expected fly wallet {want}"
+            f"Keystore holds {account.address}, not the expected "
+            f"{'fly' if role == 'trading' else role} wallet {want}"
         )
     return account
 
@@ -161,5 +174,7 @@ def summary(path=None):
         "keystore": str(keystore_dir(path)),
         "fly_wallet": address("trading", path),
         "fly_wallet_expected": expected_address(),
+        "deployer_wallet": address("deployer", path),
+        "deployer_wallet_expected": expected_address("deployer"),
         "fee_wallet": fee_wallet(),
     }

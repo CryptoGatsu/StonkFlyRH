@@ -249,6 +249,7 @@
           <button class="tab" role="tab" aria-selected="false" data-pane="screen">Screen</button>
           <button class="tab" role="tab" aria-selected="false" data-pane="universe">Universe <span id="n-universe">0</span></button>
           <button class="tab" role="tab" aria-selected="false" data-pane="donors" id="tab-donors" hidden>Donors <span id="n-donors">0</span></button>
+          <button class="tab" role="tab" aria-selected="false" data-pane="airdrops" id="tab-airdrops" hidden>Airdrops <span id="n-airdrops">0</span></button>
           <span class="obs">OBS <span id="obs">0</span></span>
         </div>
 
@@ -274,6 +275,9 @@
         </div>
         <div class="pane" id="pane-donors" hidden>
           <div id="donors"><div class="empty">No donors yet.</div></div>
+        </div>
+        <div class="pane" id="pane-airdrops" hidden>
+          <div id="airdrops"><div class="empty">No airdrops yet.</div></div>
         </div>
 
         <section class="coin" id="coin" hidden>
@@ -516,6 +520,34 @@ $("copy-addr").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText($("donate-addr").textContent); $("copy-addr").textContent = "Copied"; setTimeout(() => $("copy-addr").textContent = "Copy", 1500); } catch {}
 });
 
+function renderAirdrops() {
+  const conf = prov.airdrop || {};
+  const on = !!conf.enabled;
+  $("tab-airdrops").hidden = !on;
+  if (!on) return;
+  const drops = (meta.airdrops || []).filter((d) => d.status === "SENT" || d.status === "UNKNOWN");
+  const info = meta.airdrop || {};
+  $("n-airdrops").textContent = info.drops_sent ?? drops.length;
+  const last = (meta.airdrop_events || [])[0];
+  const would = last && last.would_send ? last.would_send : [];
+  const dec = Number(settings.airdrop_decimals ?? 18);
+  const amount = (d) => info.amount ? esc(info.amount) : qty(Number(d.amount_wei) / 10 ** dec);
+  const rows = drops.map((d) => {
+    const link = explorer ? `<a href="${esc(explorer)}/address/${esc(d.address)}" target="_blank" rel="noopener">${shortHash(d.address)}</a>` : shortHash(d.address);
+    const tx = d.tx_hash && explorer ? ` · <a href="${esc(explorer)}/tx/${esc(d.tx_hash)}" target="_blank" rel="noopener">${shortHash(d.tx_hash)}</a>` : "";
+    return `<div class="u-row"><div><b>${link}</b><div class="k">${esc(d.reason)} · ${ago(d.created)}${tx}</div></div><span class="pill ok">${amount(d)} sent</span></div>`;
+  });
+  const queued = would.map((w) => {
+    const link = explorer ? `<a href="${esc(explorer)}/address/${esc(w.address)}" target="_blank" rel="noopener">${shortHash(w.address)}</a>` : shortHash(w.address);
+    return `<div class="u-row"><div><b>${link}</b><div class="k">${esc(w.reason)}</div></div><span class="pill">${esc(w.amount)} would go</span></div>`;
+  });
+  const dry = conf.dry_run ? " · paper run: nothing is sent" : "";
+  const skipped = last && last.skipped ? ` · last round: ${esc(last.skipped)}` : "";
+  const log = `<div class="u-log">The fly drops ${esc(conf.amount ?? "")} coins to up to ${esc(conf.recipients_per_round ?? "")} wallets a round, ${Math.round(Number(conf.interval_seconds ?? 3600) / 60)} min apart, to wallets that bought tokens it screened and still hold one · ${info.wallets_seen ?? 0} wallets seen · ${esc(info.total_sent ?? "0")} sent in total${dry}${skipped}</div>`;
+  const body = rows.length || queued.length ? rows.join("") + queued.join("") : `<div class="empty">${conf.dry_run ? "No wallet qualifies yet." : "No airdrops yet."}</div>`;
+  $("airdrops").innerHTML = body + log;
+}
+
 function renderCoin() {
   const coin = prov.coin;
   $("coin").hidden = !coin;
@@ -540,7 +572,7 @@ function renderState(s) {
   explorer = (prov.network && prov.network.explorer) || null;
   quoteSymbol = settings.quote_symbol || "USDG";
   $("quote-sym").textContent = quoteSymbol;
-  renderBag(); renderLimits(); renderScreens(); renderUniverse(); renderDonations(); renderCoin();
+  renderBag(); renderLimits(); renderScreens(); renderUniverse(); renderDonations(); renderAirdrops(); renderCoin();
 }
 
 /* ---------------- rows ---------------- */

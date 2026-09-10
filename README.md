@@ -28,6 +28,14 @@ recognised as a stake in a unitised pool, and donors are paid 50% of gains above
 their own high-water mark in USDG; the operator keeps the rest. Losses are the
 donor's until a new high. [How it works, and why to ask a lawyer first](docs/donations.md).
 
+## Airdrops
+
+With `STONKFLYRH_AIRDROP=1`, the fly sends the operator's coin from the deployer
+wallet to wallets that bought tokens its screen approved and still hold one — never
+to contracts, routers, pools, its own wallets or a wallet already dropped. Amount,
+wallets per round, cadence, a daily cap and a reserve are settings. Paper runs only
+report who would receive. [Details](docs/airdrop.md).
+
 ## Start it
 
 ```sh

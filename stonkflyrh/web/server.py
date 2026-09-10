@@ -64,6 +64,24 @@ def read_meta(out):
                 "ORDER BY id DESC LIMIT 20"
             )
         ]
+        airdrops = []
+        try:
+            airdrops = [
+                {"created": r[0], "address": r[1], "amount_wei": r[2], "reason": r[3],
+                 "status": r[4], "tx_hash": r[5]}
+                for r in db.execute(
+                    "SELECT created,address,amount_wei,reason,status,tx_hash FROM airdrops "
+                    "ORDER BY id DESC LIMIT 50"
+                )
+            ]
+        except sqlite3.Error:
+            pass  # the run has no airdrop table
+        airdrop_events = [
+            json.loads(r[0])
+            for r in db.execute(
+                "SELECT payload FROM events WHERE kind='airdrops' ORDER BY id DESC LIMIT 5"
+            )
+        ]
         payouts = [
             {
                 "created": r[0],
@@ -93,6 +111,8 @@ def read_meta(out):
     meta["discovery"] = discovery
     meta["candidates_screened"] = int(candidates)
     meta["donor_events"] = donor_events
+    meta["airdrops"] = airdrops
+    meta["airdrop_events"] = airdrop_events
     return meta
 
 
@@ -132,6 +152,7 @@ def snapshot(out):
                     "screen",
                     "discovery",
                     "donations",
+                    "airdrop",
                     "coin",
                     "settings",
                 ]

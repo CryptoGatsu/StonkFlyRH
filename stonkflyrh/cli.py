@@ -24,9 +24,13 @@ def build_parser():
     prep.add_argument("--reuse-doomfly", type=Path)
     sub.add_parser("verify", help="Re-check prepared neural inputs")
 
-    wallet = sub.add_parser("wallet", help="Import or inspect the fly wallet")
+    wallet = sub.add_parser("wallet", help="Import or inspect the fly and deployer wallets")
     wallet.add_argument("action", choices=["import", "create", "show"])
     wallet.add_argument("--keystore", type=Path)
+    wallet.add_argument(
+        "--role", choices=["trading", "deployer"], default="trading",
+        help="trading: the fly wallet (default); deployer: the wallet that holds the coin and signs airdrops",
+    )
     wallet.add_argument(
         "--expect",
         help="Override the address an imported key must derive",
@@ -63,8 +67,14 @@ def build_parser():
         help="Book a USDG transfer that arrived before the run started as a donation "
              "from its sender (the money is moved out of the operator's stake)",
     )
-    donors.add_argument("--network", default=os.environ.get("STONKFLYRH_NETWORK", "robinhood"))
-    donors.add_argument("--tokens", type=Path, default=Path("tokens.json"))
+    donors.add_argument("--network", choices=sorted(NETWORKS), default=None)
+    donors.add_argument("--tokens", type=Path)
+
+    airdrop = sub.add_parser("airdrop", help="Who the fly would airdrop the coin to; --send does one round")
+    airdrop.add_argument("--out", type=Path, default=Path("runs/live"))
+    airdrop.add_argument("--send", action="store_true", help="Sign and send one round from the deployer wallet")
+    airdrop.add_argument("--network", choices=sorted(NETWORKS), default=None)
+    airdrop.add_argument("--tokens", type=Path)
 
     serve = sub.add_parser("serve", help="Serve the live trade website")
     serve.add_argument("--out", type=Path, default=Path("runs/paper"))
@@ -148,6 +158,12 @@ def settings_from(args, net_key):
         adapt_enabled=not args.no_adapt,
         discovery_enabled=not getattr(args, "no_discovery", False),
         donations_enabled=bool(getattr(args, "donations", False)),
+        airdrop_enabled=bool(getattr(args, "airdrop", False)),
+        airdrop_amount=os.environ.get("STONKFLYRH_AIRDROP_AMOUNT", "1000"),
+        airdrop_recipients_per_round=int(os.environ.get("STONKFLYRH_AIRDROP_PER_ROUND", "5")),
+        airdrop_interval_seconds=float(os.environ.get("STONKFLYRH_AIRDROP_INTERVAL_SECONDS", "3600")),
+        airdrop_daily_cap=os.environ.get("STONKFLYRH_AIRDROP_DAILY_CAP", "50000"),
+        airdrop_reserve=os.environ.get("STONKFLYRH_AIRDROP_RESERVE", "0"),
         donor_share=os.environ.get("STONKFLYRH_DONOR_SHARE", "0.5"),
         coin_address=os.environ.get("STONKFLYRH_COIN_ADDRESS", "").strip(),
         max_pool_usd=os.environ.get("STONKFLYRH_MAX_POOL_USD", "1000"),
@@ -194,21 +210,22 @@ def cmd_wallet(a):
     if a.action == "show":
         print(json.dumps(w.summary(a.keystore), indent=2))
         return
-    existing = w.address("trading", a.keystore)
+    role = a.role
+    existing = w.address(role, a.keystore)
     if existing:
         raise SystemExit(
-            f"A fly wallet keystore already holds {existing}. Move it aside deliberately."
+            f"A {role} wallet keystore already holds {existing}. Move it aside deliberately."
         )
     if a.action == "create":
         print(
-            "Creating a NEW wallet. To use the fly wallet you already funded, "
+            f"Creating a NEW {role} wallet. To use the wallet you already funded, "
             "run `wallet import` instead.",
             file=sys.stderr,
         )
-        address = w.create("trading", a.keystore)
+        address = w.create(role, a.keystore)
     else:
         address = w.import_key(
-            w.read_key_interactively(), "trading", a.keystore, expect=a.expect
+            w.read_key_interactively(role), role, a.keystore, expect=a.expect
         )
     print(json.dumps({"imported": address, **w.summary(a.keystore)}, indent=2))
     print(
@@ -355,6 +372,26 @@ def cmd_start(a, parser):
                 "delete it from .env.",
                 file=sys.stderr,
             )
+    airdrop = os.environ.get("STONKFLYRH_AIRDROP", "0") == "1"
+    if airdrop and live:
+        if not w.address("deployer"):
+            if not os.environ.get("STONKFLYRH_DEPLOYER_PRIVATE_KEY"):
+                raise SystemExit(
+                    "STONKFLYRH_AIRDROP=1 needs the deployer wallet's key: put it in .env as "
+                    "STONKFLYRH_DEPLOYER_PRIVATE_KEY for this one start, or run "
+                    "`wallet import --role deployer`."
+                )
+            address = w.import_key(os.environ["STONKFLYRH_DEPLOYER_PRIVATE_KEY"], "deployer")
+            say("wallet", {"imported_deployer": address,
+                           "note": "remove STONKFLYRH_DEPLOYER_PRIVATE_KEY from .env now"})
+        else:
+            say("wallet", {"deployer_wallet": w.address("deployer")})
+        if os.environ.get("STONKFLYRH_DEPLOYER_PRIVATE_KEY"):
+            print(
+                "WARNING: STONKFLYRH_DEPLOYER_PRIVATE_KEY is still set. The keystore holds the "
+                "key; delete it from .env.",
+                file=sys.stderr,
+            )
 
     # 3. chain
     if not fixture:
@@ -381,6 +418,7 @@ def cmd_start(a, parser):
     r.no_adapt = os.environ.get("STONKFLYRH_ADAPT", "1") != "1"
     r.no_discovery = os.environ.get("STONKFLYRH_DISCOVERY", "1") != "1"
     r.donations = os.environ.get("STONKFLYRH_DONATIONS", "1") == "1"
+    r.airdrop = airdrop
     r.out = out
     r.network = None
     r.tokens = None
@@ -486,6 +524,39 @@ def cmd_donors(a):
             "withdrawn_total": meta.get("withdrawn_total", "0"),
             "recent_payouts": pool.payouts(10),
         }, indent=2))
+    finally:
+        ledger.close()
+
+
+def cmd_airdrop(a):
+    """Show who the fly would drop the coin to now; with --send, do one round."""
+    from .airdrop import Airdrop
+    from .fees import fee_wallet
+    from .ledger import Ledger
+    from .wallet import address as wallet_address
+    from .wallet import expected_address, load
+
+    settings, meta = run_settings(a.out)
+    if not settings.coin_address:
+        raise RuntimeError("This run has no coin_address; set STONKFLYRH_COIN_ADDRESS and restart")
+    _, client, registry, _ = chain_context(a.network, a.tokens, [])
+    ledger = Ledger(a.out / "ledger.sqlite", settings, meta["mode"])
+    try:
+        account = None
+        if a.send:
+            if meta["mode"] != "live":
+                raise RuntimeError("Only a live run sends; this one is " + str(meta["mode"]))
+            account = load("deployer")
+        deployer = account.address if account else (wallet_address("deployer") or expected_address("deployer"))
+        airdrop = Airdrop(
+            settings, client, registry, ledger, account, settings.coin_address, deployer,
+            excluded=[wallet_address("trading") or FLY_WALLET, fee_wallet(),
+                      registry.quote_address, registry.weth],
+        )
+        with ledger.transaction():
+            report = airdrop.round(time.time(), ledger.universe(), dry_run=not a.send)
+            ledger.put("airdrop", airdrop.report(time.time()))
+        print(json.dumps({**report, "history": airdrop.history(10)}, indent=2, default=str))
     finally:
         ledger.close()
 
@@ -629,7 +700,7 @@ def cmd_run(a, parser):
         "live" if a.live else "paper",
         capital=D(settings.capital_usd),
     )
-    donations = None
+    donations = airdrop = None
     try:
         if a.live:
             broker = RobinhoodChainBroker.from_env(
@@ -677,6 +748,24 @@ def cmd_run(a, parser):
             elif a.fixture:
                 donations = FixtureDonations(settings, ledger, pool)
             ledger.put("pool", pool.report(D(ledger.get("equity_usd") or ledger.cash)))
+        if settings.airdrop_enabled and not a.fixture:
+            # Paper runs only report who would receive the coin; live runs need
+            # the deployer key and send from that wallet, never the fly's.
+            from .airdrop import Airdrop
+            from .fees import fee_wallet
+            from .wallet import address as wallet_address
+            from .wallet import expected_address, load
+
+            deployer_account = load("deployer") if a.live else None
+            deployer = deployer_account.address if deployer_account else (
+                wallet_address("deployer") or expected_address("deployer")
+            )
+            airdrop = Airdrop(
+                settings, client, registry, ledger, deployer_account, settings.coin_address, deployer,
+                excluded=[broker.address if a.live else wallet_address("trading"), fee_wallet(),
+                          registry.quote_address, registry.weth],
+            )
+            ledger.put("airdrop", airdrop.report(time.time()))
         if a.resume_reviewed:
             if (out / "STOP").exists() or ledger.pending():
                 raise RuntimeError(
@@ -688,7 +777,7 @@ def cmd_run(a, parser):
             ledger.put("halted", None)
         if a.preflight_only:
             return
-        _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations, venue)
+        _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations, venue, airdrop)
     except KeyboardInterrupt:
         print("Stopped; run state preserved.", flush=True)
     except Exception as e:
@@ -730,7 +819,7 @@ def _coin_identity(settings, client):
     return coin
 
 
-def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations=None, venue=None):
+def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations=None, venue=None, airdrop=None):
 
     from .actions import StonkflyRHActions
     from .data import verify
@@ -804,6 +893,16 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             "fee": fee_wallet(),
         },
         "screen": {"enabled": screen is not None},
+        "airdrop": {
+            "enabled": airdrop is not None,
+            "dry_run": airdrop is not None and airdrop.account is None,
+            "deployer": airdrop.deployer if airdrop is not None else None,
+            "amount": settings.airdrop_amount,
+            "recipients_per_round": settings.airdrop_recipients_per_round,
+            "interval_seconds": settings.airdrop_interval_seconds,
+            "daily_cap": settings.airdrop_daily_cap,
+            "min_tokens": settings.airdrop_min_tokens,
+        },
         "discovery": {
             "enabled": discovery is not None,
             "interval_seconds": settings.discovery_interval_seconds,
@@ -865,7 +964,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             break
         try:
             _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, provider,
-                  action, controller, screen, watch, discovery, donations)
+                  action, controller, screen, watch, discovery, donations, airdrop)
             failures = 0
         except Exception as e:
             # A trade in flight is never covered by this: the broker raises its
@@ -890,7 +989,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
 
 
 def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, provider,
-          action, controller, screen, watch, discovery, donations):
+          action, controller, screen, watch, discovery, donations, airdrop=None):
     """One observation: look, decide, maybe trade, record."""
     from PIL import Image
 
@@ -940,6 +1039,13 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
         ledger.put("equity_usd", str(equity))
         if donations is not None:
             ledger.put("pool", donations.pool.report(equity))
+        if airdrop is not None and airdrop.due(time.time()):
+            # The coin moves from the deployer wallet; nothing here touches the
+            # fly's cash, so it runs after the books for this tick are settled.
+            drop = airdrop.round(time.time(), ledger.universe())
+            ledger.put("airdrop", airdrop.report(time.time()))
+            if drop["sent"] or drop["would_send"]:
+                print(json.dumps({"airdrop": drop}), flush=True)
 
         # A rug is checked before reinforcement so its longer aversive pulse
         # replaces, rather than follows, this observation's ordinary loss pulse.
@@ -1074,6 +1180,7 @@ def main():
         "fees": cmd_fees,
         "donors": cmd_donors,
         "discovery": cmd_discovery,
+        "airdrop": cmd_airdrop,
         "preview": cmd_preview,
         "serve": cmd_serve,
         "status": cmd_status,

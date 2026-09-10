@@ -189,3 +189,37 @@ def test_missing_run_directory_still_answers(tmp_path):
         httpd.stopping.set()
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_the_site_shows_the_coin_and_donations_before_the_worker_publishes(tmp_path, monkeypatch):
+    """A worker that has not yet finished preflight has written no provenance;
+    the site still shows the coin, the fly wallet and the donors panel from .env."""
+    write_run(tmp_path)
+    (tmp_path / "provenance.json").unlink()
+    monkeypatch.setenv("STONKFLYRH_COIN_ADDRESS", "0x" + "f1" * 20)
+    monkeypatch.delenv("STONKFLYRH_DONATIONS", raising=False)
+    snap = web.snapshot(tmp_path)
+    assert snap["provenance"]["coin"]["address"] == "0x" + "f1" * 20
+    assert snap["provenance"]["donations"]["enabled"] is True
+    assert snap["provenance"]["wallets"]["fly"].startswith("0x68e8")
+    monkeypatch.setenv("STONKFLYRH_DONATIONS", "0")
+    assert "donations" not in web.snapshot(tmp_path)["provenance"]
+
+
+def test_state_lists_airdrops_when_the_run_has_them(site):
+    base, out = site
+    import sqlite3
+
+    db = sqlite3.connect(out / "ledger.sqlite")
+    db.execute(
+        "CREATE TABLE airdrops (id INTEGER PRIMARY KEY AUTOINCREMENT,created REAL,address TEXT,"
+        "amount_wei TEXT,reason TEXT,status TEXT,tx_hash TEXT)"
+    )
+    db.execute(
+        "INSERT INTO airdrops(created,address,amount_wei,reason,status,tx_hash) VALUES (1,'0xabc','5','why','SENT','0xtx')"
+    )
+    db.commit()
+    db.close()
+    _, _, body = get(base + "/api/state")
+    drops = json.loads(body)["meta"]["airdrops"]
+    assert drops[0]["address"] == "0xabc" and drops[0]["status"] == "SENT"

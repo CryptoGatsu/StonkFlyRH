@@ -115,6 +115,18 @@ class Settings:
     max_pool_usd: str = "1000"
     loss_stop_fraction: str = "0.25"
 
+    # -- airdrop ------------------------------------------------------------
+    # The operator's coin, sent from the deployer wallet to wallets that bought
+    # tokens the screen approved and still hold one. Amounts are whole coins.
+    airdrop_enabled: bool = False
+    airdrop_amount: str = "1000"
+    airdrop_recipients_per_round: int = 5
+    airdrop_interval_seconds: float = 3600
+    airdrop_daily_cap: str = "50000"
+    airdrop_reserve: str = "0"
+    airdrop_min_tokens: int = 1
+    airdrop_lookback_blocks: int = 200000
+
     # -- adaptation ---------------------------------------------------------
     adapt_enabled: bool = True
     volatility_window: int = 30
@@ -191,6 +203,7 @@ class Settings:
         self._check_resilience()
         self._check_discovery()
         self._check_donations()
+        self._check_airdrop()
         self._check_adaptation()
         self._check_neural()
 
@@ -207,6 +220,24 @@ class Settings:
             raise ValueError("Pool cap must hold the operator's stake and stay under $100,000")
         if not D(0) < D(self.loss_stop_fraction) < 1:
             raise ValueError("Loss stop fraction must be between 0 and 1")
+
+    def _check_airdrop(self):
+        if type(self.airdrop_enabled) is not bool:
+            raise ValueError("airdrop_enabled is a flag")
+        if D(self.airdrop_amount) <= 0 or D(self.airdrop_reserve) < 0:
+            raise ValueError("Airdrop amount must be positive and the reserve non-negative")
+        if type(self.airdrop_recipients_per_round) is not int or not 1 <= self.airdrop_recipients_per_round <= 50:
+            raise ValueError("An airdrop round sends to 1-50 wallets")
+        if not math.isfinite(self.airdrop_interval_seconds) or self.airdrop_interval_seconds < 600:
+            raise ValueError("Airdrop rounds run at most every ten minutes")
+        if D(self.airdrop_daily_cap) < D(self.airdrop_amount):
+            raise ValueError("The daily airdrop cap must hold at least one drop")
+        if type(self.airdrop_min_tokens) is not int or not 1 <= self.airdrop_min_tokens <= 24:
+            raise ValueError("airdrop_min_tokens must be 1-24 screened tokens")
+        if type(self.airdrop_lookback_blocks) is not int or not 0 <= self.airdrop_lookback_blocks <= 5_000_000:
+            raise ValueError("Airdrop lookback must be 0-5,000,000 blocks")
+        if self.airdrop_enabled and not self.coin_address:
+            raise ValueError("An airdrop needs coin_address: which coin to send")
 
     def _check_resilience(self):
         if type(self.rpc_error_tolerance) is not int or not 1 <= self.rpc_error_tolerance <= 100:
