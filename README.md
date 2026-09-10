@@ -104,7 +104,7 @@ python -m stonkflyrh run --live
 
 Posting to X needs the four app credentials in `.env` and `STONKFLYRH_POST_TO_X=1`;
 without them every post is still drafted to `posts.jsonl` and shown on the site.
-[Operation and recovery](docs/operations.md).
+[Operation and recovery](docs/operations.md) · [Deploying](docs/deploy.md).
 
 ```sh
 python -m stonkflyrh status

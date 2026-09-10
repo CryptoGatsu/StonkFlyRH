@@ -1,0 +1,22 @@
+# /etc/systemd/system/stonkflyrh-site.service
+#
+# The read-only site. Safe to restart forever: it holds no key and can place
+# no trade. Keep it on 127.0.0.1 and put nginx in front if you want it public.
+[Unit]
+Description=StonkFlyRH live trades site
+After=network-online.target
+
+[Service]
+Type=simple
+User=stonkfly
+WorkingDirectory=/opt/stonkflyrh
+ExecStart=/opt/stonkflyrh/.venv/bin/python -m stonkflyrh serve --out runs/live --host 127.0.0.1 --port 8787
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/stonkflyrh/runs
+
+[Install]
+WantedBy=multi-user.target

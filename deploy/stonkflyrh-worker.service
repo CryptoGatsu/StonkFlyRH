@@ -1,0 +1,28 @@
+# /etc/systemd/system/stonkflyrh-worker.service
+#
+# The trading worker. It does NOT auto-restart on purpose: when it stops it is
+# because it halted (loss stop, unresolved order, fee overrun, dependency
+# error) and a person must look at runs/live before it trades again.
+[Unit]
+Description=StonkFlyRH trading worker (Robinhood Chain, live)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stonkfly
+WorkingDirectory=/opt/stonkflyrh
+EnvironmentFile=/opt/stonkflyrh/.env
+Environment=OPENBLAS_NUM_THREADS=1
+ExecStart=/opt/stonkflyrh/.venv/bin/python -m stonkflyrh run --live --products PONS --out runs/live
+Restart=no
+KillSignal=SIGINT
+TimeoutStopSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/stonkflyrh/runs
+MemoryMax=14G
+
+[Install]
+WantedBy=multi-user.target
