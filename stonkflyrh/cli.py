@@ -63,6 +63,14 @@ def build_parser():
                          help="Rows shown on load; the rest replay")
     preview.add_argument("--interval-ms", type=int, default=3500)
 
+    start = sub.add_parser(
+        "start",
+        help="Everything from .env: prepare, verify, import the wallet, preflight, run",
+    )
+    start.add_argument("--out", type=Path)
+    start.add_argument("--steps", type=int, default=0)
+    start.add_argument("--preflight-only", action="store_true")
+
     run = sub.add_parser("run")
     run.add_argument("--live", action="store_true")
     run.add_argument(
@@ -87,14 +95,15 @@ def build_parser():
     )
     run.add_argument("--no-screen", action="store_true", help="Disable the rug screen")
     run.add_argument("--no-adapt", action="store_true", help="Disable market adaptation")
+    run.add_argument("--no-discovery", action="store_true", help="Trade only the listed tokens")
     run.add_argument("--out", type=Path)
     run.add_argument("--network", choices=sorted(NETWORKS), default=None)
     run.add_argument("--tokens", type=Path)
     run.add_argument(
         "--products",
-        nargs="+",
-        default=["PONS"],
-        help="Memecoin symbols from the registry, traded against WETH",
+        nargs="*",
+        default=None,
+        help="Seed memecoin symbols from the registry; discovery adds more",
     )
     run.add_argument("--capital-usd", default="100")
     run.add_argument("--order-limit-usd", default="10")
@@ -105,15 +114,23 @@ def build_parser():
     return p
 
 
+def env_products(default=("PONS",)):
+    raw = os.environ.get("STONKFLYRH_PRODUCTS", "")
+    listed = tuple(p.strip().upper() for p in raw.replace(";", ",").split(",") if p.strip())
+    return listed or tuple(default)
+
+
 def settings_from(args, net_key):
+    products = tuple(args.products) if args.products else env_products()
     return Settings(
         network=net_key,
-        products=tuple(args.products),
+        products=products,
         capital_usd=args.capital_usd,
         order_limit_usd=args.order_limit_usd,
         learning=not args.frozen,
         screen_enabled=not args.no_screen,
         adapt_enabled=not args.no_adapt,
+        discovery_enabled=not getattr(args, "no_discovery", False),
         neural_ms=args.neural_ms,
         pulse_ms=min(200, args.neural_ms / 2),
     )
@@ -259,6 +276,98 @@ def cmd_preview(a):
 
     target = write(a.out, a.write, at_rest=a.at_rest, interval_ms=a.interval_ms)
     print(json.dumps({"preview": str(target), "from": str(a.out)}, indent=2))
+
+
+REQUIRED_LIVE_ENV = ("STONKFLYRH_LIVE", "STONKFLYRH_KEYSTORE_PASSWORD")
+
+
+def cmd_start(a, parser):
+    """The one command: read .env, get everything ready, then run.
+
+    Idempotent. Each step is skipped when its result already exists, so the
+    same command boots a fresh machine and resumes a running installation.
+    """
+    from . import wallet as w
+
+    mode = (os.environ.get("STONKFLYRH_MODE") or "paper").lower()
+    if mode not in ("paper", "live", "fixture"):
+        raise SystemExit("STONKFLYRH_MODE must be paper, live or fixture")
+    live = mode == "live"
+    fixture = mode == "fixture"
+    products = env_products()
+    out = a.out or Path(f"runs/{mode}")
+    say = lambda step, detail: print(json.dumps({"start": step, **detail}), flush=True)
+
+    # 1. dataset
+    from .neural.common import GRAPH
+
+    if not GRAPH.exists():
+        say("prepare", {"note": "downloading and compiling the MaleCNS graph; several minutes"})
+        from .data import prepare
+
+        prepare(None)
+    else:
+        say("prepare", {"ready": True})
+
+    # 2. wallet
+    if live:
+        missing = [k for k in REQUIRED_LIVE_ENV if not os.environ.get(k)]
+        if missing:
+            raise SystemExit(
+                "Live mode needs these in .env: " + ", ".join(missing)
+                + " (STONKFLYRH_LIVE must be exactly I_ACCEPT_REAL_ONCHAIN_TRADES)"
+            )
+        if not w.address("trading"):
+            if not os.environ.get("STONKFLYRH_PRIVATE_KEY"):
+                raise SystemExit(
+                    "No fly wallet keystore yet. Put the fly wallet's private key in .env as "
+                    "STONKFLYRH_PRIVATE_KEY for this one start, or run `wallet import`."
+                )
+            address = w.import_key(os.environ["STONKFLYRH_PRIVATE_KEY"], "trading")
+            say("wallet", {"imported": address, "note": "remove STONKFLYRH_PRIVATE_KEY from .env now"})
+        else:
+            say("wallet", {"fly_wallet": w.address("trading")})
+        if os.environ.get("STONKFLYRH_PRIVATE_KEY"):
+            print(
+                "WARNING: STONKFLYRH_PRIVATE_KEY is still set. The keystore holds the key; "
+                "delete it from .env.",
+                file=sys.stderr,
+            )
+
+    # 3. chain
+    if not fixture:
+        net, client, registry, verified = chain_context(
+            None, None, list(products), Settings(products=products).pool_fee_tier
+        )
+        say("chain", {"network": net.name, "chain_id": net.chain_id, "router": registry.router,
+                      "quote": verified["quote"]["symbol"], "seeds": list(products)})
+
+    # 4. run
+    class Args:
+        pass
+
+    r = Args()
+    r.live = live
+    r.preflight_only = a.preflight_only
+    r.resume_reviewed = False
+    r.fixture = fixture
+    r.steps = a.steps
+    r.fast = fixture
+    r.frozen = os.environ.get("STONKFLYRH_FROZEN") == "1"
+    r.no_screen = os.environ.get("STONKFLYRH_SCREEN", "1") != "1"
+    r.no_adapt = os.environ.get("STONKFLYRH_ADAPT", "1") != "1"
+    r.no_discovery = os.environ.get("STONKFLYRH_DISCOVERY", "1") != "1"
+    r.out = out
+    r.network = None
+    r.tokens = None
+    r.products = list(products)
+    r.capital_usd = os.environ.get("STONKFLYRH_CAPITAL_USD", "100")
+    r.order_limit_usd = os.environ.get("STONKFLYRH_ORDER_USD", "10")
+    r.neural_ms = 500
+    say("run", {"mode": mode, "out": str(out), "capital_usd": r.capital_usd,
+                "order_limit_usd": r.order_limit_usd,
+                "site": "python -m stonkflyrh serve --out " + str(out)})
+    return cmd_run(r, parser)
 
 
 def cmd_serve(a):
@@ -427,9 +536,9 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
     from .fees import fee_wallet
     from .neural.controller import FlyController
     from .reinforcement import reinforcement
+    from .discovery import FixtureDiscovery, PoolDiscovery
     from .risk import Guard, Veto
     from .safety import RugScreen, RugWatch
-    from .social import XPoster, compose_rug, compose_trade
     from .wallet import address as wallet_address
 
     verified_data = verify()
@@ -452,7 +561,21 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         else None
     )
     watch = RugWatch(settings, ledger, screen)
-    poster = XPoster(out, settings)
+    if a.fixture:
+        discovery = FixtureDiscovery(settings, ledger, market) if settings.discovery_enabled else None
+    else:
+        # Seeds get their addresses and pools from the registry; discovered
+        # tokens from earlier in this run come back from the ledger.
+        ledger.seed_universe(registry, verified, time.time())
+        for symbol, entry in ledger.universe().items():
+            if entry.get("source") != "seed" and entry.get("address"):
+                registry.add_token(entry)
+                market.add_product(symbol, entry["pool"], entry["pool_fee"])
+        discovery = (
+            PoolDiscovery(settings, client, registry, ledger, market, screen, verified["factory"])
+            if settings.discovery_enabled and screen is not None
+            else None
+        )
 
     provenance = {
         "settings": dataclasses.asdict(settings),
@@ -471,7 +594,11 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         "usd_reference": oracle.report(),
         "wallets": {"fly": wallet_address("trading"), "fee": fee_wallet()},
         "screen": {"enabled": screen is not None},
-        "social": poster.status(),
+        "discovery": {
+            "enabled": discovery is not None,
+            "interval_seconds": settings.discovery_interval_seconds,
+            "max_products": settings.max_products,
+        },
         "decoder": "DNp20 mean R-L: buy/sell; DNpe017 spike gate; otherwise hold. "
         "Engineered fixed mapping.",
         "learning_validated": False,
@@ -508,10 +635,22 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         eth_usd = oracle.eth_usd()
         ledger.put("eth_usd", str(eth_usd))
         limits = guard.limits(eth_usd)
+        scan = None
+        if discovery is not None and discovery.due(time.time()):
+            # Discovery only ever changes what the fly may see; it runs before
+            # the snapshot so a new token is priced on the tick it joins.
+            scan = discovery.scan(time.time(), eth_usd)
+            dropped = discovery.prune(time.time(), eth_usd)
+            if dropped:
+                scan["dropped"] = dropped
+            if scan.get("added") or dropped:
+                print(json.dumps({"discovery": scan}), flush=True)
+        market.products = ledger.products()
         quotes = market.snapshot(limits["order_limit"])
         guard.check(quotes, time.time(), eth_usd)
         market.record(quotes)
-        product = settings.products[ledger.get("tick") % len(settings.products)]
+        universe = ledger.products()
+        product = universe[ledger.get("tick") % len(universe)]
         q = quotes[product]
         equity = ledger.equity(quotes, eth_usd)
         ledger.put("equity_usd", str(equity))
@@ -561,7 +700,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
                 provider.quotes = fresh
                 provider.eth_usd = eth_usd
                 provider.history = market.history
-                provider.pools = {p: market.pool(p) for p in settings.products}
+                provider.pools = {p: market.pool(p) for p in universe}
                 provider.gas_price_wei = (
                     client.gas_price()
                     if client is not None
@@ -593,6 +732,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             "neural": neural,
             "screen": screen_json,
             "rug": rug,
+            "discovery": scan,
             "execution": order,
         }
         with (out / "events.jsonl").open("a") as f:
@@ -601,10 +741,6 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             os.fsync(f.fileno())
         Image.fromarray(frame).save(out / "latest-input.png")
         (out / "latest.json").write_text(json.dumps(row, indent=2) + "\n")
-
-        if rug:
-            poster.publish(compose_rug(rug, net.explorer))
-        poster.publish(compose_trade(row, net.explorer))
 
         print(
             json.dumps(
@@ -643,6 +779,11 @@ def main():
         else:
             print(json.dumps(verify()))
         return
+    if a.command == "start":
+        try:
+            return cmd_start(a, parser)
+        except RuntimeError as e:
+            raise SystemExit(str(e)) from None
     setup = {
         "wallet": cmd_wallet,
         "chain": cmd_chain,

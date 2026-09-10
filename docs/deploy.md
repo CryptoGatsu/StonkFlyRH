@@ -16,102 +16,82 @@ Launch from another wallet you control. Fund the fly wallet with USDG and gas
 only. If you want the fly to trade your coin, add it to `tokens.json` like any
 other memecoin, once it has graduated to its Uniswap pool.
 
-## 1. A machine
+## 1. Install
 
 The connectome needs the full MaleCNS graph in memory: **16 GB RAM**, 4+ cores,
-~10 GB disk, Ubuntu 24.04, Python 3.11, a C++17 compiler. A small VPS is fine;
-it does not need a GPU. Each observation is ~0.5 s of neural time and the run
-samples the market once a minute, so it is not CPU-bound between ticks.
+~10 GB disk, Ubuntu 22.04/24.04. No GPU. One command as root:
 
 ```sh
-sudo adduser --system --group --home /opt/stonkflyrh stonkfly
-sudo -u stonkfly git clone https://github.com/CryptoGatsu/StonkFlyRH /opt/stonkflyrh
-cd /opt/stonkflyrh
-sudo -u stonkfly python3.11 -m venv .venv
-sudo -u stonkfly .venv/bin/pip install -e '.[test]'
-sudo -u stonkfly .venv/bin/python -m stonkflyrh prepare     # ~1.1 GB download, compiles the kernel
-sudo -u stonkfly .venv/bin/python -m pytest -q
+curl -fsSL https://raw.githubusercontent.com/CryptoGatsu/StonkFlyRH/main/deploy/install.sh | sudo bash
 ```
 
-## 2. Prove the loop offline
+It installs Python 3.11 and a compiler, creates the `stonkfly` user, clones to
+`/opt/stonkflyrh`, builds the venv, copies `.env.example` → `.env` and
+`tokens.example.json` → `tokens.json`, installs both systemd units, starts the
+site, and runs the tests. Read the script first; it is short.
+
+## 2. Fill in `.env`
+
+That is the only file. Open `/opt/stonkflyrh/.env`:
+
+| Variable | Set it to |
+| --- | --- |
+| `STONKFLYRH_MODE` | `paper` first. `live` when you mean it. |
+| `STONKFLYRH_CAPITAL_USD` / `STONKFLYRH_ORDER_USD` | `100` / `10` |
+| `STONKFLYRH_PRODUCTS` | seed symbols from `tokens.json`, e.g. `PONS` — discovery adds the rest |
+| `STONKFLYRH_PRIVATE_KEY` | the fly wallet's key, **for the first live start only** |
+| `STONKFLYRH_KEYSTORE_PASSWORD` | a password for the keystore `start` writes |
+| `STONKFLYRH_LIVE` | `I_ACCEPT_REAL_ONCHAIN_TRADES`, live only |
+
+Then add the memecoins you want as seeds to `tokens.json` (address, decimals,
+pool fee). The Uniswap and USDG addresses are already there.
+
+## 3. Paper first
 
 ```sh
-.venv/bin/python -m stonkflyrh run --fixture --fast --steps 12 --out runs/check
-.venv/bin/python -m stonkflyrh serve --out runs/check
-```
-
-Synthetic prices, no chain, no addresses. If the site at `127.0.0.1:8787` shows
-ticks and the fly moving, the neural side and the site work on this machine.
-
-## 3. Verify the chain and the addresses
-
-```sh
-cp tokens.example.json tokens.json
-# add the memecoins you want under "tokens": address, decimals, pool_fee
-.venv/bin/python -m stonkflyrh chain verify --products PONS
-```
-
-This is the step that turns the pre-filled addresses from "what Uniswap's records
-say" into "what chain 4663 says": code at every address, router and quoter
-agreeing on the factory, USDG's symbol and decimals, a pool for every pair, a
-WETH/USDG pool for gas. It refuses anything that does not check out. Look the
-addresses up on robinhoodchain.blockscout.com yourself as well.
-
-Then ask the screen what it thinks of your list, with no wallet involved:
-
-```sh
-.venv/bin/python -m stonkflyrh screen --products PONS
-```
-
-## 4. Paper-trade against real prices
-
-```sh
-.venv/bin/python -m stonkflyrh run --products PONS --out runs/paper
-```
-
-Real Uniswap quotes, real rug screen, simulated fills. Leave it for a day. Watch
-the DECISIONS tab: you want to see vetoes with reasons you agree with, and the
-size scale moving with volatility. This is also the run that tells you whether
-the tokens you picked ever clear the screen.
-
-## 5. Fund and import the fly wallet
-
-Bridge to Robinhood Chain (Robinhood's app supports USDG withdrawals to it;
-Across bridges ETH). Into `0x68e8…3201`:
-
-- **at most 100 USDG** — preflight refuses more than `capital_usd`;
-- **~0.02 ETH** for gas — swaps cost a few cents each on this chain.
-
-```sh
-cp .env.example .env            # fill in; chmod 600 .env
-.venv/bin/python -m stonkflyrh wallet import
-```
-
-The import refuses a key that derives any address but the fly wallet's. For
-unattended runs `STONKFLYRH_KEYSTORE_PASSWORD` must be in `.env`, which means
-the password lives on the box; that is the trade-off of an unattended bot. Back
-up `keystore/` and the password somewhere else.
-
-## 6. Preflight, then go live
-
-```sh
-.venv/bin/python -m stonkflyrh run --live --preflight-only --products PONS
-.venv/bin/python -m stonkflyrh run --live --products PONS --out runs/live
-```
-
-Preflight reads everything and sends nothing: balances, allowances, the screen,
-the price reference. It initialises the ledger from the wallet's actual USDG.
-The second command trades. Ctrl-C stops it; the same command resumes from its
-checkpoint. `touch runs/live/STOP` stops it from another terminal.
-
-## 7. Run it as services
-
-```sh
-sudo cp deploy/stonkflyrh-worker.service deploy/stonkflyrh-site.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now stonkflyrh-site stonkflyrh-worker
+sudo systemctl start stonkflyrh-worker
 journalctl -fu stonkflyrh-worker
 ```
+
+`start` runs in order, skipping anything already done: download and compile the
+connectome (several minutes, once); verify every address in `tokens.json` against
+chain 4663 — code present, router and quoter agreeing on the factory, USDG's
+symbol and decimals, a pool for every seed, a WETH/USDG pool for gas; preflight;
+run. With `STONKFLYRH_MODE=paper` it prices off real Uniswap quotes, screens real
+pools, discovers real launches, and fills nothing.
+
+Open the site (`127.0.0.1:8787`, or through `deploy/nginx.conf`). Leave it a day.
+Watch DECISIONS for vetoes with reasons you agree with, UNIVERSE for what
+discovery is admitting, and the size scale moving with volatility.
+
+## 4. Fund the fly wallet
+
+Bridge to Robinhood Chain (Robinhood's app withdraws USDG to it; Across bridges
+ETH). Into `0x68e8…3201`, and nothing else:
+
+- **at most 100 USDG** — preflight refuses a wallet funded past `STONKFLYRH_CAPITAL_USD`;
+- **~0.02 ETH** for gas — swaps cost cents on this chain.
+
+## 5. Go live
+
+In `.env`: `STONKFLYRH_MODE=live`, `STONKFLYRH_LIVE=I_ACCEPT_REAL_ONCHAIN_TRADES`,
+the private key and a keystore password. Then:
+
+```sh
+sudo systemctl restart stonkflyrh-worker stonkflyrh-site
+journalctl -fu stonkflyrh-worker
+```
+
+The first live start imports the key into `keystore/` (it refuses a key that does
+not derive the fly wallet), then prints a line telling you to **delete
+`STONKFLYRH_PRIVATE_KEY` from `.env`**. Do that. The keystore password stays;
+that is what unattended means. Back up `keystore/` and the password elsewhere.
+
+Preflight reads everything and sends nothing, sizes the ledger from the wallet's
+actual USDG, and only then does the loop begin trading. `touch runs/live/STOP`
+stops it from another terminal; restarting the unit resumes from the checkpoint.
+
+## 6. Operating it
 
 The **worker does not auto-restart**. When it exits it has halted — loss stop,
 an order it could not resolve, a balance that moved, a dependency error — and
@@ -124,12 +104,6 @@ To make the site public, `deploy/nginx.conf` proxies it with SSE buffering off.
 Add TLS with certbot. The page publishes both wallet addresses, balances, and
 every trade; that is the point, but know it.
 
-## 8. Posting to X
-
-Create an app at developer.x.com with read+write, generate the four user-context
-credentials, put them in `.env` and set `STONKFLYRH_POST_TO_X=1`. Restart the
-worker. Until then every post is still drafted to `runs/live/posts.jsonl` and
-shown on the POSTS tab, so you can see the voice before it goes out.
 
 ## What "learning" means here, honestly
 
@@ -152,8 +126,9 @@ separate `--out` if you want to know whether the plasticity is doing anything.
 
 ## Choosing coins
 
-The fly trades the list you give it. It does not discover launches. On Pons that
-means picking graduated tokens with real USDG pools, adding them to `tokens.json`,
-and letting `chain verify` and `screen` tell you which ones the run would even
-touch. Discovery — scanning Pons graduations and screening them automatically —
-is the obvious next feature and is not built.
+You do not have to. Discovery watches the Uniswap factory for new pools paired
+with USDG — which is where every Pons graduation lands — screens each one, and
+admits survivors up to `max_products` (12). Seeds in `STONKFLYRH_PRODUCTS` are
+always kept; discovered tokens that stop clearing the screen are dropped unless
+held. The UNIVERSE tab shows what came in, when, and why things were withheld.
+`STONKFLYRH_DISCOVERY=0` turns it off and trades only your seeds.

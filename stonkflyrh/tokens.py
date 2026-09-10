@@ -76,6 +76,25 @@ class Registry:
             )
         return cls(network_key, json.loads(target.read_text()))
 
+    def add_token(self, entry):
+        """Admit a discovered token for the rest of this process."""
+        symbol = entry["symbol"]
+        if not SYMBOL.match(symbol) or symbol == self.quote_symbol:
+            raise RuntimeError("Invalid symbol for a discovered token: " + str(symbol))
+        address = checksum(entry["address"])
+        if address in (self.quote_address, self.weth):
+            raise RuntimeError("A discovered token cannot be the quote asset or WETH")
+        self.tokens[symbol] = {
+            "symbol": symbol,
+            "name": entry.get("name", symbol),
+            "address": address,
+            "decimals": int(entry["decimals"]),
+            "pool_fee": int(entry["pool_fee"]),
+        }
+
+    def remove_token(self, symbol):
+        self.tokens.pop(symbol, None)
+
     def token(self, symbol):
         if symbol not in self.tokens:
             raise RuntimeError(f"{symbol} is not in the registry for {self.network_key}")

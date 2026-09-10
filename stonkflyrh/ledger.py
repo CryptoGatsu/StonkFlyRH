@@ -44,6 +44,14 @@ class Ledger:
             "CREATE TABLE IF NOT EXISTS blocklist (product TEXT PRIMARY KEY,"
             "at REAL NOT NULL,reason TEXT NOT NULL)"
         )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS candidates (address TEXT PRIMARY KEY,"
+            "at REAL NOT NULL,outcome TEXT NOT NULL)"
+        )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS discovery (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "at REAL NOT NULL,report TEXT NOT NULL)"
+        )
         self.fees = FeeBook(self)
         if self.get("settings") is None:
             if capital is None:
@@ -60,6 +68,10 @@ class Ledger:
                     "initial_cash": str(capital),
                     "positions": {},
                     "entries": {},
+                    "universe": {
+                        p: {"symbol": p, "name": p, "source": "seed", "added_at": 0}
+                        for p in settings.products
+                    },
                     "gas_spent": "0",
                     "anchor": str(capital),
                     "tick": 0,
@@ -246,6 +258,71 @@ class Ledger:
                 entries = dict(self.get("entries") or {})
                 entries.pop(p["product"], None)
                 self.put("entries", entries)
+
+    # -- the universe --------------------------------------------------------
+
+    def universe(self):
+        return dict(self.get("universe") or {})
+
+    def products(self):
+        return list(self.universe())
+
+    def add_to_universe(self, entry):
+        universe = self.universe()
+        universe[entry["symbol"]] = dict(entry)
+        self.put("universe", universe)
+
+    def remove_from_universe(self, symbol, reason, now):
+        universe = self.universe()
+        if symbol in universe:
+            removed = universe.pop(symbol)
+            self.put("universe", universe)
+            self.record_discovery(
+                {"at": now, "dropped": [{"symbol": symbol, "reason": reason, **removed}]}
+            )
+
+    def seed_universe(self, registry, verified, now):
+        """Fill seed entries with what the registry and the chain know."""
+        universe = self.universe()
+        changed = False
+        for symbol in registry.tokens:
+            entry = registry.tokens[symbol]
+            pool = (verified or {}).get("pools", {}).get(symbol, {})
+            if symbol not in universe or not universe[symbol].get("address"):
+                universe[symbol] = {
+                    "symbol": symbol,
+                    "name": entry.get("name", symbol),
+                    "address": entry["address"],
+                    "decimals": entry["decimals"],
+                    "pool_fee": pool.get("fee", entry.get("pool_fee")),
+                    "pool": pool.get("pool"),
+                    "source": universe.get(symbol, {}).get("source", "seed"),
+                    "added_at": universe.get(symbol, {}).get("added_at", now),
+                }
+                changed = True
+        if changed:
+            self.put("universe", universe)
+        return universe
+
+    def mark_candidate(self, address, outcome, now):
+        self.db.execute(
+            "INSERT OR REPLACE INTO candidates VALUES (?,?,?)", (address, now, outcome)
+        )
+
+    def seen_candidates(self):
+        return [r[0] for r in self.db.execute("SELECT address FROM candidates")]
+
+    def record_discovery(self, report):
+        self.db.execute(
+            "INSERT INTO discovery(at,report) VALUES (?,?)",
+            (report.get("at", 0), json.dumps(report, allow_nan=False)),
+        )
+
+    def discoveries(self, limit=20):
+        rows = self.db.execute(
+            "SELECT report FROM discovery ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [json.loads(r[0]) for r in rows]
 
     # -- rug memory ----------------------------------------------------------
 

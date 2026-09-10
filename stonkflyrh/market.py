@@ -108,8 +108,21 @@ class RobinhoodChainMarket:
         self.products = settings.products
         self.quoter = client.contract(registry.quoter, QUOTER_ABI)
         self.qd = int(registry.quote_decimals)
+        self.products = list(settings.products)
         self.history = {p: [] for p in self.products}
         self.seeded = {}
+
+    def add_product(self, symbol, pool, fee):
+        if symbol not in self.products:
+            self.products.append(symbol)
+        self.history.setdefault(symbol, [])
+        self.verified.setdefault("pools", {})[symbol] = {"pool": pool, "fee": fee}
+
+    def remove_product(self, symbol):
+        if symbol in self.products:
+            self.products.remove(symbol)
+        self.history.pop(symbol, None)
+        self.seeded.pop(symbol, None)
 
     def quote_call(self, token_in, token_out, amount_in, fee):
         """Public: the rug screen and the stablecoin oracle price through this."""
@@ -159,11 +172,12 @@ class RobinhoodChainMarket:
         """Price both legs at `probe_quote` USDG, the size this run would trade."""
         result = {}
         now = time.time()
-        for product in self.products:
+        for product in list(self.products):
             entry = self.registry.token(product)
             fee = self.registry.pool_fee(product, self.s.pool_fee_tier)
             base_decimals = entry["decimals"]
             quote_token = self.registry.quote_address
+            self.history.setdefault(product, [])
             probe_quote_wei = to_wei(probe_quote, self.qd)
             if probe_quote_wei <= 0:
                 raise RuntimeError("Order limit rounds to zero quote units")
@@ -207,7 +221,7 @@ class RobinhoodChainMarket:
             self.history[p] = self.history[p][-self.HISTORY :]
 
     def pool(self, product):
-        return self.verified["pools"][product]["pool"]
+        return (self.verified.get("pools", {}).get(product) or {}).get("pool")
 
     def report(self):
         return {"feed": "robinhood-chain-quoter", "seed": dict(self.seeded)}
@@ -220,10 +234,20 @@ class FixtureMarket:
 
     def __init__(self, settings, *_):
         self.s = settings
-        self.products = settings.products
+        self.products = list(settings.products)
         self.tick = 0
         self.history = {p: [] for p in self.products}
         self.registry = None
+
+    def add_product(self, symbol, pool=None, fee=None):
+        if symbol not in self.products:
+            self.products.append(symbol)
+        self.history.setdefault(symbol, [])
+
+    def remove_product(self, symbol):
+        if symbol in self.products:
+            self.products.remove(symbol)
+        self.history.pop(symbol, None)
 
     def pool(self, product):
         return None
@@ -235,9 +259,12 @@ class FixtureMarket:
         quotes = {}
         now = time.time()
         probe = D(probe_quote)
-        for j, p in enumerate(self.products):
-            # Memecoin prices in dollars: fractions of a cent to a few cents.
+        for p in list(self.products):
+            # Memecoin prices in dollars: fractions of a cent to a few cents,
+            # fixed per symbol so a token keeps its price when the list grows.
+            j = sum(ord(c) for c in p)
             base = D("0.00025") * (D(10) ** (j % 3))
+            self.history.setdefault(p, [])
             # A slow drift plus a faster wobble, so realised volatility is a
             # real number the guard can adapt to rather than a constant.
             drift = 1 + 0.06 * math.sin(self.tick * 0.35 + j)

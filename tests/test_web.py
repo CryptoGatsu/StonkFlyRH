@@ -61,7 +61,7 @@ def write_run(tmp_path, ticks=3):
                             "explorer": "https://explorer.example"},
                 "wallets": {"fly": "0xaaa", "fee": "0xbbb"},
                 "screen": {"enabled": True},
-                "social": {"configured": False, "opted_in": False, "live": False},
+                "discovery": {"enabled": True, "interval_seconds": 600, "max_products": 12},
             }
         )
     )

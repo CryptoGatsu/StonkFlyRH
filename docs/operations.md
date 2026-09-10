@@ -110,14 +110,6 @@ A $25 drawdown halts new orders. **It does not liquidate holdings or cap further
 losses.** Holdings stay exposed to the market after a halt — including a rugged one;
 see [the rug screen](safety.md).
 
-## Posting to X
-
-Every post is written to `posts.jsonl` in the run directory first and shown on the
-site. Sending needs all of `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`,
-`X_ACCESS_SECRET` from an X developer app with write access, plus
-`STONKFLYRH_POST_TO_X=1`. Posts are at least 90 s apart and never repeated. A failed
-send is recorded by exception type only — the text could echo a signed header — and
-never interrupts trading.
 
 ## Stopping
 
@@ -138,6 +130,22 @@ watching halts the run for a manual balance check instead of being booked automa
 
 `--resume-reviewed` clears a transient halt after reconciliation succeeds. It refuses to
 clear a loss stop or a fee overrun: those are financial stops and are yours to decide on.
+
+## Discovery
+
+Every `discovery_interval_seconds` (10 min) the worker reads the Uniswap v3 factory's
+`PoolCreated` logs since the block it last scanned (on a fresh run, the last
+`discovery_lookback_blocks`), in chunks the public RPC accepts. A pool counts when one
+side is USDG and the fee tier is 0.05%, 0.3% or 1%. Newest first, up to
+`discovery_batch` a scan, each candidate token has its `symbol()`/`decimals()` read and is
+put through the full rug screen. Approved tokens join the universe up to `max_products`;
+rejected ones are remembered so they are not screened again. After a scan, every
+discovered token the fly does not hold is re-screened and dropped if it no longer clears.
+Seeds from `STONKFLYRH_PRODUCTS` are never dropped.
+
+Symbols are normalised to uppercase alphanumerics and a collision gets four hex
+characters of the address appended, so two tokens calling themselves PEPE stay two
+tokens. `STONKFLYRH_DISCOVERY=0` trades only the seeds.
 
 ## The website
 

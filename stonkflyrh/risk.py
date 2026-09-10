@@ -116,7 +116,7 @@ class Guard:
             raise Veto(self.l.get("halted"))
         if self.l.pending():
             raise Veto("Order outcome unresolved")
-        if set(quotes) != set(self.s.products):
+        if set(quotes) != set(self.l.products()):
             raise Veto("Incomplete market snapshot")
         for product, q in quotes.items():
             if q.product != product:
@@ -141,7 +141,7 @@ class Guard:
         now = time.time() if now is None else now
         self.check(quotes, now, eth_usd)
         limits = self.limits(eth_usd)
-        if product not in self.s.products or side not in ("BUY", "SELL"):
+        if product not in self.l.products() or side not in ("BUY", "SELL"):
             raise Veto("Invalid neural proposal")
         if now - self.l.get("last_attempt") < float(self.cooldown_seconds()):
             raise Veto("Order cooldown")

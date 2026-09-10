@@ -20,7 +20,7 @@ MAX_ORDER_USD = Decimal("100")
 # usually 1%; a tier with no pool is rejected at preflight.
 POOL_FEE_TIERS = (500, 3000, 10000)
 
-SYMBOL = re.compile(r"^[A-Z0-9]{2,12}$")
+SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9_]{1,15}$")
 
 
 def D(value):
@@ -89,6 +89,13 @@ class Settings:
     rug_drawdown: str = "0.5"
     rug_exit_spread: str = "0.5"
 
+    # -- discovery ----------------------------------------------------------
+    discovery_enabled: bool = True
+    discovery_interval_seconds: float = 600
+    discovery_lookback_blocks: int = 400000
+    discovery_batch: int = 12
+    max_products: int = 12
+
     # -- adaptation ---------------------------------------------------------
     adapt_enabled: bool = True
     volatility_window: int = 30
@@ -126,7 +133,7 @@ class Settings:
         if not SYMBOL.match(self.quote_symbol) or not 0 <= self.quote_decimals <= 36:
             raise ValueError("Quote asset needs a symbol and plausible decimals")
         if len(self.products) > 8:
-            raise ValueError("At most 8 products per run")
+            raise ValueError("At most 8 seed products per run")
         if not 0 < D(self.capital_usd) <= MAX_CAPITAL_USD:
             raise ValueError(f"Maximum capital ${MAX_CAPITAL_USD}")
         if not 0 < D(self.order_limit_usd) <= min(D(self.capital_usd), MAX_ORDER_USD):
@@ -161,8 +168,21 @@ class Settings:
         ):
             raise ValueError("Rate limit: >=60 s between orders, <=100 orders/day")
         self._check_screen()
+        self._check_discovery()
         self._check_adaptation()
         self._check_neural()
+
+    def _check_discovery(self):
+        if type(self.discovery_enabled) is not bool:
+            raise ValueError("discovery_enabled is a flag")
+        if not math.isfinite(self.discovery_interval_seconds) or self.discovery_interval_seconds < 60:
+            raise ValueError("Discovery runs at most once a minute")
+        if type(self.discovery_lookback_blocks) is not int or not 0 <= self.discovery_lookback_blocks <= 5_000_000:
+            raise ValueError("Discovery lookback must be 0-5,000,000 blocks")
+        if type(self.discovery_batch) is not int or not 1 <= self.discovery_batch <= 50:
+            raise ValueError("Discovery screens 1-50 candidates a scan")
+        if type(self.max_products) is not int or not len(self.products) <= self.max_products <= 24:
+            raise ValueError("max_products must hold the seeds and be at most 24")
 
     def _check_screen(self):
         if D(self.min_liquidity_usd) < 0:
@@ -224,6 +244,7 @@ class Settings:
             raise ValueError("Neural intervals must be multiples of 0.1 ms")
 
     def signature(self):
-        return hashlib.sha256(
-            json.dumps(asdict(self), sort_keys=True).encode()
-        ).hexdigest()
+        # The seed list is not part of the protocol: discovery grows the universe
+        # during a run, and changing the seeds on a restart adds to it.
+        fields = {k: v for k, v in asdict(self).items() if k != "products"}
+        return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()

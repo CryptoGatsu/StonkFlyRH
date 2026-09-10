@@ -34,8 +34,8 @@ edges. Downloaded and checksum-verified by `python -m stonkflyrh prepare`; see
 
 The website is served from the standard library and pulls in no framework. It links
 JetBrains Mono and Archivo from Google Fonts with a system fallback stack; a viewer
-without that host sees the system faces. Posting to X signs OAuth 1.0a with `hmac` and
-`hashlib` from the standard library.
+without that host sees the system faces. The FLY.EXE scene loads three.js r128 from
+cdnjs; without it the page renders everything but the scene.
 
 ## Contracts
 

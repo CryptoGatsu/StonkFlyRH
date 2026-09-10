@@ -138,11 +138,12 @@
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   .why { color: var(--muted); font-size: 11px; margin-top: 8px; line-height: 1.6; }
 
-  /* posts pane */
-  .post { border-top: 1px solid var(--line-soft); padding: 14px 0; }
-  .post:first-child { border-top: 0; }
-  .post p { margin: 0; white-space: pre-wrap; font-size: 12px; }
-  .post .meta { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 11px; margin-top: 8px; }
+  /* universe pane */
+  .u-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px 14px; border-top: 1px solid var(--line-soft); padding: 12px 0; align-items: center; }
+  .u-row:first-child { border-top: 0; }
+  .u-row b { font: 700 11px/1 var(--pixel); letter-spacing: .1em; }
+  .u-row .k { color: var(--muted); font-size: 11px; margin-top: 4px; word-break: break-all; }
+  .u-log { color: var(--muted); font-size: 11px; padding: 10px 0 0; border-top: 1px dashed var(--line); margin-top: 8px; line-height: 1.7; }
 
   /* collapsible */
   details { border-top: 1px dashed var(--line); margin-top: 8px; }
@@ -224,7 +225,7 @@
           <button class="tab" role="tab" aria-selected="true" data-pane="trades" id="tab-trades">Trades <span id="n-trades">0</span></button>
           <button class="tab" role="tab" aria-selected="false" data-pane="decisions">Decisions</button>
           <button class="tab" role="tab" aria-selected="false" data-pane="screen">Screen</button>
-          <button class="tab" role="tab" aria-selected="false" data-pane="posts">Posts</button>
+          <button class="tab" role="tab" aria-selected="false" data-pane="universe">Universe <span id="n-universe">0</span></button>
           <span class="obs">OBS <span id="obs">0</span></span>
         </div>
 
@@ -245,8 +246,8 @@
         <div class="pane" id="pane-screen" hidden>
           <div id="screens"><div class="empty">No token has been screened yet.</div></div>
         </div>
-        <div class="pane" id="pane-posts" hidden>
-          <div id="posts"><div class="empty">Nothing posted yet.</div></div>
+        <div class="pane" id="pane-universe" hidden>
+          <div id="universe"><div class="empty">No tokens in the universe yet.</div></div>
         </div>
 
         <details>
@@ -337,7 +338,7 @@ function renderBag() {
     </div>`);
   }
   let invested = 0;
-  const products = settings.products || Object.keys(positions);
+  const products = Object.keys(meta.universe || {}).length ? Object.keys(meta.universe) : (settings.products || Object.keys(positions));
   for (const sym of products) {
     const held = Number(positions[sym] ?? 0);
     const q = latestByProduct[sym] && latestByProduct[sym].quote;
@@ -379,7 +380,8 @@ function renderLimits() {
   add("Adaptation", s.adapt_enabled === false ? "off" : "on");
   add("Gas spent", meta.gas_spent ? Number(meta.gas_spent).toFixed(6) + " ETH" : "—");
   add("ETH / USD", meta.eth_usd ? usd(meta.eth_usd) : "—");
-  add("Posts to X", prov.social && prov.social.live ? "live" : "drafting locally");
+  add("Discovery", prov.discovery && prov.discovery.enabled ? "on" : "off");
+  add("Universe cap", s.max_products ?? "—");
   add("Network", (prov.network && prov.network.name) || meta.network || "—");
   $("limits").innerHTML = kv.join("");
   const wallets = prov.wallets || {};
@@ -403,12 +405,25 @@ function renderScreens() {
   }).join("");
 }
 
-function renderPosts(posts) {
-  if (!posts || !posts.length) { $("posts").innerHTML = `<div class="empty">Nothing posted yet.</div>`; return; }
-  $("posts").innerHTML = posts.slice().reverse().slice(0, 15).map((p) => {
-    const cls = p.status === "SENT" ? "ok" : p.status === "FAILED" ? "no" : "warn";
-    return `<div class="post"><p>${esc(p.text)}</p><div class="meta"><span class="pill ${cls}">${esc(p.status)}</span><span>${clock(p.at)}</span>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">view</a>` : ""}</div></div>`;
-  }).join("");
+function renderUniverse() {
+  const universe = meta.universe || {};
+  const entries = Object.values(universe).sort((a, b) => (b.added_at || 0) - (a.added_at || 0));
+  $("n-universe").textContent = entries.length;
+  if (!entries.length) { $("universe").innerHTML = `<div class="empty">No tokens in the universe yet.</div>`; return; }
+  const screens = meta.screens || {};
+  const rows = entries.map((e) => {
+    const v = screens[e.symbol];
+    const verdict = v ? `<span class="pill ${v.approved ? "ok" : "no"}">${v.approved ? "clear" : "withheld"}</span>` : `<span class="pill">unscreened</span>`;
+    const src = e.source === "seed" ? "seed" : e.source === "fixture" ? "discovered (fixture)" : "discovered";
+    const when = e.added_at ? " · " + ago(e.added_at) : "";
+    const link = e.address && explorer ? `<a href="${esc(explorer)}/address/${esc(e.address)}" target="_blank" rel="noopener">${shortHash(e.address)}</a>` : (e.address ? shortHash(e.address) : "");
+    return `<div class="u-row"><div><b>${esc(e.symbol)}</b>${e.name && e.name !== e.symbol ? ` <span class="k" style="display:inline">${esc(e.name)}</span>` : ""}
+      <div class="k">${src}${when}${link ? " · " + link : ""}${e.pool_fee ? " · " + (e.pool_fee / 10000) + "% pool" : ""}</div></div>${verdict}</div>`;
+  });
+  const scans = meta.discovery || [];
+  const last = scans[0];
+  const log = last ? `<div class="u-log">Last scan ${ago(last.at)}: ${last.candidates ?? 0} new pool${last.candidates === 1 ? "" : "s"} paired with ${esc(quoteSymbol)}, ${(last.added || []).length} admitted, ${(last.rejected || []).length} withheld${last.dropped ? `, ${last.dropped.length} dropped` : ""} · ${meta.candidates_screened ?? 0} candidates screened this run</div>` : "";
+  $("universe").innerHTML = rows.join("") + log;
 }
 
 function renderState(s) {
@@ -416,7 +431,7 @@ function renderState(s) {
   explorer = (prov.network && prov.network.explorer) || null;
   quoteSymbol = settings.quote_symbol || "USDG";
   $("quote-sym").textContent = quoteSymbol;
-  renderBag(); renderLimits(); renderScreens();
+  renderBag(); renderLimits(); renderScreens(); renderUniverse();
 }
 
 /* ---------------- rows ---------------- */
@@ -609,14 +624,11 @@ function preview() {
   $("audit").hidden = true;
   renderState(PREVIEW.state);
   PREVIEW.trades.slice(0, PREVIEW.at_rest).forEach((row) => renderTrade(row, false));
-  renderPosts(PREVIEW.posts.slice(0, PREVIEW.posts_at_rest));
   scene.frame(PREVIEW.frame); connected(true);
-  let i = PREVIEW.at_rest, p = PREVIEW.posts_at_rest;
+  let i = PREVIEW.at_rest;
   const step = () => {
     if (i >= PREVIEW.trades.length) return;
     const row = PREVIEW.trades[i++]; renderTrade(row, true);
-    const due = PREVIEW.posts.filter((x) => x.at <= row.wall_time).length;
-    if (due > p) { p = due; renderPosts(PREVIEW.posts.slice(0, p)); }
     setTimeout(step, PREVIEW.interval_ms);
   };
   setTimeout(step, PREVIEW.interval_ms);
@@ -627,7 +639,6 @@ async function bootstrap() {
     renderState(await (await fetch("/api/state")).json());
     const { trades } = await (await fetch("/api/trades")).json();
     trades.forEach((row) => renderTrade(row, false));
-    renderPosts((await (await fetch("/api/posts")).json()).posts);
     scene.frame(frameSrc());
   } catch { /* the stream retry below covers a cold start */ }
 }
@@ -637,7 +648,6 @@ function stream() {
   const es = new EventSource("/api/stream?since=" + lastTick);
   es.addEventListener("open", () => connected(true));
   es.addEventListener("state", (e) => renderState(JSON.parse(e.data)));
-  es.addEventListener("posts", (e) => renderPosts(JSON.parse(e.data).posts));
   es.addEventListener("trade", (e) => { const row = JSON.parse(e.data); if ((Number(row.tick) || 0) > lastTick) { renderTrade(row, true); scene.frame(frameSrc()); } });
   es.addEventListener("error", () => { connected(false); es.close(); setTimeout(stream, 3000); });
 }

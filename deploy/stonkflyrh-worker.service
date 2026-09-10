@@ -14,14 +14,14 @@ User=stonkfly
 WorkingDirectory=/opt/stonkflyrh
 EnvironmentFile=/opt/stonkflyrh/.env
 Environment=OPENBLAS_NUM_THREADS=1
-ExecStart=/opt/stonkflyrh/.venv/bin/python -m stonkflyrh run --live --products PONS --out runs/live
+ExecStart=/opt/stonkflyrh/.venv/bin/python -m stonkflyrh start
 Restart=no
 KillSignal=SIGINT
 TimeoutStopSec=120
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/opt/stonkflyrh/runs
+ReadWritePaths=/opt/stonkflyrh/runs /opt/stonkflyrh/keystore /opt/stonkflyrh/data
 MemoryMax=14G
 
 [Install]

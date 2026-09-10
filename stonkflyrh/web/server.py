@@ -51,6 +51,11 @@ def read_meta(out):
                 screens[product] = json.loads(verdict)
             except json.JSONDecodeError:
                 continue
+        discovery = [
+            json.loads(r[0])
+            for r in db.execute("SELECT report FROM discovery ORDER BY id DESC LIMIT 12")
+        ]
+        candidates = db.execute("SELECT COUNT(*) FROM candidates").fetchone()[0]
         payouts = [
             {
                 "created": r[0],
@@ -77,6 +82,8 @@ def read_meta(out):
     meta["blocklist"] = blocklist
     meta["rugs"] = rugs
     meta["screens"] = screens
+    meta["discovery"] = discovery
+    meta["candidates_screened"] = int(candidates)
     return meta
 
 
@@ -114,7 +121,7 @@ def snapshot(out):
                     "wallets",
                     "usd_reference",
                     "screen",
-                    "social",
+                    "discovery",
                     "settings",
                 ]
             }
@@ -168,10 +175,6 @@ class Handler(BaseHTTPRequestHandler):
             since = int((query.get("since") or ["0"])[0])
             rows = [r for r in read_trades(self.out) if int(r.get("tick", 0)) > since]
             return self._json({"trades": rows})
-        if route == "/api/posts":
-            from ..social import read_posts
-
-            return self._json({"posts": read_posts(self.out)})
         if route == "/api/stream":
             since = query.get("since")
             return self._stream(int(since[0]) if since else None)
@@ -222,9 +225,6 @@ class Handler(BaseHTTPRequestHandler):
                 if now - last_state > 5:
                     last_state = now
                     self._event("state", snapshot(self.out))
-                    from ..social import read_posts
-
-                    self._event("posts", {"posts": read_posts(self.out, limit=20)})
                 time.sleep(1)
         except (BrokenPipeError, ConnectionResetError):
             return

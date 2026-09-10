@@ -2,8 +2,8 @@
 
 # StonkFlyRH
 
-A fly-connectome simulation that trades memecoins on **Robinhood Chain**, screens
-them for rugs first, and posts what it does to X. A fork of
+A fly-connectome simulation that finds memecoins on **Robinhood Chain** as their pools
+appear, screens them for rugs, and trades the survivors. A fork of
 [nftechie/stonkfly](https://github.com/nftechie/stonkfly), which traded Coinbase spot.
 Actual neural output, actual on-chain swaps, a live website. Profitable learning has
 not been demonstrated.
@@ -21,6 +21,20 @@ These are engineered reinforcement signals, **not modeled pain receptors**. Syna
 changes do not establish that it learns to trade profitably. [Model](docs/model.md) ·
 [Rug screen](docs/safety.md).
 
+## Start it
+
+```sh
+cp .env.example .env        # STONKFLYRH_MODE=paper to begin; live when you mean it
+python -m stonkflyrh start
+```
+
+`start` reads `.env` and does the rest in order: downloads and compiles the connectome
+if it is missing, imports the fly wallet if it is not yet in `keystore/`, verifies every
+contract address against the chain, runs preflight, then trades. It is idempotent —
+the same command boots a fresh machine and resumes a running one. For a server,
+`deploy/install.sh` sets up the user, services and site in one go; see
+[Deploying](docs/deploy.md).
+
 ## Live trade site
 
 ![The live trade dashboard](assets/site.png)
@@ -31,9 +45,10 @@ python -m stonkflyrh preview --out runs/paper    # one static page that replays 
 ```
 
 Every tick streams as it happens: the feed with signal, dollar size, execution and
-explorer link; the rug screen's verdict on each token; positions; the chart frame the
-connectome is looking at right now; and every post it made to X. The site tails the
-worker's log and ledger, holds no key, and can place no trade.
+explorer link; the rug screen's verdict on each token; the universe and what discovery
+found; positions; and the chart frame the connectome is looking at right now, on the
+monitor in front of the fly. The site tails the worker's log and ledger, holds no key,
+and can place no trade.
 
 ## Limits, in dollars
 
@@ -48,6 +63,16 @@ worker's log and ledger, holds no key, and can place no trade.
 Every memecoin is traded against USDG, so the ledger is already in dollars and a $10
 order is 10 USDG — nothing to convert, nothing to drift. Gas is still ETH; it is valued
 into equity by selling a probe of WETH into the USDG pool through the same quoter.
+
+## Discovery
+
+Every launchpad on Robinhood Chain ends in a Uniswap pool, so the fly watches the one
+place they all arrive: the v3 factory's `PoolCreated` events. Each new pool paired with
+USDG is a candidate; each candidate goes through the rug screen; only an approved token
+joins the universe the fly trades, up to `max_products`. A discovered token that later
+stops clearing the screen is dropped unless the fly holds it. Seeds you list in `.env`
+are always kept. Discovery decides what the fly may *see*; the screen decides what it
+may *buy*; the connectome decides whether it does.
 
 ## The rug screen
 
@@ -102,8 +127,6 @@ python -m stonkflyrh run --live --preflight-only
 python -m stonkflyrh run --live
 ```
 
-Posting to X needs the four app credentials in `.env` and `STONKFLYRH_POST_TO_X=1`;
-without them every post is still drafted to `posts.jsonl` and shown on the site.
 [Operation and recovery](docs/operations.md) · [Deploying](docs/deploy.md).
 
 ```sh
