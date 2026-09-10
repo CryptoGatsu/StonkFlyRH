@@ -48,7 +48,7 @@
       "bridges": [
         {
           "symbol": "GOOGL",
-          "_comment": "fill in the GOOGL/USDG v4 PoolKey; currencies sorted ascending",
+          "_comment": "Unfilled (zero addresses) is ignored. Fill in the GOOGL/USDG v4 PoolKey with currencies sorted ascending to route GOOGL-paired launches before the pool is seen.",
           "pool": {
             "currency0": "0x0000000000000000000000000000000000000000",
             "currency1": "0x0000000000000000000000000000000000000000",

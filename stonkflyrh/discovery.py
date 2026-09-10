@@ -109,11 +109,17 @@ class PoolDiscovery:
         bridges = self.l.get("bridges") or {}
         for b in (self.registry.v4 or {}).get("bridges", []):
             pool = b["pool"]
+            if v4mod.NATIVE in (checksum(pool["currency0"]), checksum(pool["currency1"])):
+                # An unfilled slot in the registry, not a pool. Leave it alone.
+                continue
             key = v4mod.pool_key(
                 pool["currency0"], pool["currency1"], pool["fee"], pool["tickSpacing"], pool["hooks"]
             )
             if self.registry.quote_address not in (key["currency0"], key["currency1"]):
-                raise RuntimeError(f"Bridge {b.get('symbol')} must be a USDG pool")
+                self.l.record_discovery(
+                    {"at": 0, "bridge_ignored": b.get("symbol"), "reason": "not a USDG pool"}
+                )
+                continue
             other = key["currency1"] if key["currency0"] == self.registry.quote_address else key["currency0"]
             bridges[other] = {"symbol": b.get("symbol", other[:8]), "route": [key], "source": "registry"}
         if bridges:

@@ -161,6 +161,19 @@ def test_a_registry_bridge_is_used_before_any_pool_is_seen(tmp_path):
         ledger.close()
 
 
+def test_an_unfilled_registry_bridge_is_ignored_not_fatal(tmp_path):
+    zero = v4.NATIVE
+    bridges = [{"symbol": "GOOGL", "pool": {"currency0": zero, "currency1": zero, "fee": 500, "tickSpacing": 10, "hooks": zero}},
+               {"symbol": "BAD", "pool": {"currency0": checksum(addr(1)), "currency1": checksum(addr(2)), "fee": 500, "tickSpacing": 10, "hooks": zero}}]
+    logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
+    ledger, _, _, disc = build(tmp_path, logs, {COIN: ("WOOF", 18)}, bridges=bridges)
+    try:
+        assert disc.bridges() == {}
+        assert [a["symbol"] for a in disc.scan(time.time(), ETH_USD)["added"]] == ["WOOF"]
+    finally:
+        ledger.close()
+
+
 def test_a_pool_with_no_route_waits_for_a_bridge(tmp_path):
     logs = [init_log(GOOGL, COIN, 30000, 60, PONS_HOOK, 4900)]
     ledger, _, _, disc = build(tmp_path, logs, {COIN: ("FLY", 18), GOOGL: ("GOOGL", 18)})
