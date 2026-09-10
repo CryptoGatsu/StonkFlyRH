@@ -1,0 +1,22 @@
+__pycache__/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Local credentials and wallets. Never commit these.
+.env
+keystore/
+*.key
+*.keystore
+
+# Operator contract registry, filled in locally.
+tokens.json
+
+# Run state: ledgers, checkpoints, logs, sensory frames.
+runs/
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

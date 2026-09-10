@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StonkFlyRH — live trades</title>
+<style>
+  :root {
+    --bg: #080b12; --panel: #0e131d; --line: #1c2536; --ink: #e6ecf7;
+    --muted: #7d8ba4; --buy: #35d69b; --sell: #ff5f7a; --hold: #6b7a95;
+    --accent: #6ea8ff; --warn: #ffc44d;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 var(--mono);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 56px; }
+  header {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 20px;
+  }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .04em; }
+  h1 span { color: var(--muted); font-weight: 400; }
+  .tag {
+    font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px;
+    color: var(--muted);
+  }
+  .tag.live { color: var(--warn); border-color: #4a3a12; background: #241b06; }
+  .tag.paper { color: var(--buy); border-color: #14402f; background: #08201a; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--hold); display: inline-block; margin-right: 6px; }
+  .dot.on { background: var(--buy); box-shadow: 0 0 8px var(--buy); }
+  .spacer { flex: 1 1 auto; }
+  .grid { display: grid; gap: 14px; }
+  .stats { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .k { color: var(--muted); font-size: 11px; letter-spacing: .09em; text-transform: uppercase; }
+  .v { font-size: 20px; margin-top: 6px; word-break: break-all; }
+  .v small { font-size: 12px; color: var(--muted); }
+  .cols { grid-template-columns: 1.55fr 1fr; align-items: start; }
+  @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+  h2 { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 620px; }
+  th { text-align: left; color: var(--muted); font-weight: 400; font-size: 11px;
+       letter-spacing: .08em; text-transform: uppercase; padding: 0 10px 8px 0; }
+  td { padding: 7px 10px 7px 0; border-top: 1px solid var(--line); white-space: nowrap; }
+  tr.fresh td { animation: flash 1.1s ease-out; }
+  @keyframes flash { from { background: #17233a; } to { background: transparent; } }
+  .side { font-weight: 600; }
+  .BUY { color: var(--buy); } .SELL { color: var(--sell); } .HOLD { color: var(--hold); }
+  .pill { font-size: 11px; padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.ok { color: var(--buy); border-color: #14402f; }
+  .pill.no { color: var(--sell); border-color: #451a24; }
+  .split { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line); margin: 10px 0 8px; }
+  .split i { display: block; height: 100%; }
+  .legend { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+  .addr { font-size: 11px; color: var(--muted); word-break: break-all; margin-top: 4px; }
+  .rows > div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line); }
+  .rows > div:first-child { border-top: 0; }
+  .rows b { font-weight: 500; }
+  img.frame { width: 100%; border-radius: 8px; border: 1px solid var(--line); display: block; image-rendering: pixelated; }
+  footer { margin-top: 26px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+  .empty { color: var(--muted); padding: 18px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>StonkFlyRH <span>· live trades</span></h1>
+    <span class="tag" id="mode">…</span>
+    <span class="tag" id="network">…</span>
+    <span class="tag" id="source">…</span>
+    <span class="spacer"></span>
+    <span class="tag"><i class="dot" id="dot"></i><span id="conn">connecting</span></span>
+  </header>
+
+  <div class="grid stats">
+    <div class="card"><div class="k">Equity (WETH)</div><div class="v" id="equity">—</div></div>
+    <div class="card"><div class="k">Cash (WETH)</div><div class="v" id="cash">—</div></div>
+    <div class="card"><div class="k">Ticks</div><div class="v" id="tick">—</div></div>
+    <div class="card"><div class="k">Fills charged</div><div class="v" id="fills">—</div></div>
+    <div class="card"><div class="k">Fees collected</div><div class="v" id="gross">—</div></div>
+    <div class="card"><div class="k">Dev share (20%)</div><div class="v" id="devfee">—</div></div>
+  </div>
+
+  <div class="grid cols">
+    <section class="card">
+      <h2>Trade feed</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>Tick</th><th>Time</th><th>Pair</th><th>Signal</th>
+            <th>Bid</th><th>Ask</th><th>Execution</th><th>Fee</th>
+          </tr></thead>
+          <tbody id="feed"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="feed-empty">Waiting for the worker to write its first tick…</div>
+    </section>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Fee split</h2>
+        <div class="split"><i id="bar-dev" style="width:20%;background:var(--accent)"></i><i id="bar-tre" style="width:80%;background:#31405c"></i></div>
+        <div class="legend"><span>20% development</span><span>80% treasury</span></div>
+        <div class="rows" style="margin-top:10px">
+          <div><span>Gross</span><b id="f-gross">—</b></div>
+          <div><span>Development</span><b id="f-dev">—</b></div>
+          <div><span>Treasury</span><b id="f-tre">—</b></div>
+        </div>
+        <div class="k" style="margin-top:14px">Development wallet</div>
+        <div class="addr" id="w-dev">not configured</div>
+        <div class="k" style="margin-top:10px">Fee wallet</div>
+        <div class="addr" id="w-fee">not created</div>
+        <div class="k" style="margin-top:10px">Trading wallet</div>
+        <div class="addr" id="w-trade">not created</div>
+      </section>
+
+      <section class="card">
+        <h2>Positions</h2>
+        <div class="rows" id="positions"><div><span>None</span><b>—</b></div></div>
+      </section>
+
+      <section class="card">
+        <h2>Neural input</h2>
+        <img class="frame" id="frame" alt="Latest chart rendered into the connectome" src="/latest-input.png">
+        <div class="rows" style="margin-top:10px">
+          <div><span>Decoder Δ (Hz)</span><b id="n-diff">—</b></div>
+          <div><span>Gate spikes</span><b id="n-gate">—</b></div>
+          <div><span>Stimulus</span><b id="n-stim">—</b></div>
+          <div><span>Plastic edges changed</span><b id="n-mem">—</b></div>
+        </div>
+      </section>
+
+      <section class="card" id="payout-card" hidden>
+        <h2>Fee payouts</h2>
+        <div class="rows" id="payouts"></div>
+      </section>
+    </div>
+  </div>
+
+  <footer>
+    Read-only view of a local run. Paper mode is simulated execution against real
+    public prices. Profitable learning has not been demonstrated; nothing here is
+    financial advice.
+  </footer>
+</div>
+
+<script>
+"use strict";
+const WEI = 10n ** 18n;
+const $ = (id) => document.getElementById(id);
+let lastTick = 0;
+let explorer = null;
+
+function fmtWei(value, digits = 6) {
+  try {
+    const v = BigInt(String(value ?? "0"));
+    const whole = v / WEI;
+    const frac = (v % WEI).toString().padStart(18, "0").slice(0, digits);
+    return `${whole}.${frac}`;
+  } catch { return "—"; }
+}
+function fmtDec(value, digits = 6) {
+  if (value === null || value === undefined) return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  return n.toFixed(digits);
+}
+function shortHash(h) { return h ? h.slice(0, 10) + "…" + h.slice(-6) : ""; }
+function fmtPrice(value) {
+  if (value === null || value === undefined) return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return "—";
+  // Memecoin prices in WETH span many orders of magnitude; one notation
+  // throughout keeps the column readable.
+  return n < 1e-4 ? n.toExponential(4) : n.toPrecision(6);
+}
+function clock(seconds) {
+  return new Date(Number(seconds) * 1000).toLocaleTimeString([], { hour12: false });
+}
+
+function renderState(s) {
+  const meta = s.meta || {};
+  const prov = s.provenance || {};
+  const mode = meta.mode || "—";
+  const modeEl = $("mode");
+  modeEl.textContent = mode;
+  modeEl.className = "tag " + (mode === "live" ? "live" : "paper");
+  $("network").textContent = (prov.network && prov.network.name) || meta.network || "—";
+  $("source").textContent = prov.feed || "—";
+  explorer = (prov.network && prov.network.explorer) || null;
+
+  $("cash").innerHTML = fmtDec(meta.cash, 6);
+  $("tick").textContent = meta.tick ?? "—";
+  const fees = meta.fees || {};
+  $("fills").textContent = fees.fills_charged ?? "—";
+  $("gross").innerHTML = fmtWei(fees.gross_wei) + " <small>WETH</small>";
+  $("devfee").innerHTML = fmtWei(fees.dev_wei) + " <small>WETH</small>";
+  $("f-gross").textContent = fmtWei(fees.gross_wei);
+  $("f-dev").textContent = fmtWei(fees.dev_wei);
+  $("f-tre").textContent = fmtWei(fees.treasury_wei);
+
+  const wallets = prov.wallets || {};
+  $("w-dev").textContent = wallets.development || "not configured";
+  $("w-fee").textContent = wallets.fee || "not created";
+  $("w-trade").textContent = wallets.trading || "not created";
+
+  const positions = meta.positions || {};
+  const rows = Object.entries(positions).filter(([, v]) => Number(v) !== 0);
+  $("positions").innerHTML = rows.length
+    ? rows.map(([k, v]) => `<div><span>${k}</span><b>${fmtDec(v, 4)}</b></div>`).join("")
+    : `<div><span>Flat</span><b>—</b></div>`;
+
+  const payouts = meta.payouts || [];
+  $("payout-card").hidden = payouts.length === 0;
+  $("payouts").innerHTML = payouts.map((p) => {
+    const link = p.tx_hash && explorer
+      ? `<a href="${explorer}/tx/${p.tx_hash}" target="_blank" rel="noopener">${shortHash(p.tx_hash)}</a>`
+      : (p.status || "");
+    return `<div><span>${p.beneficiary} → ${fmtWei(p.amount_wei)}</span><b>${link}</b></div>`;
+  }).join("");
+}
+
+function renderTrade(row, fresh) {
+  const neural = row.neural || {};
+  const exec = row.execution || {};
+  const quote = row.quote || {};
+  const side = neural.side || "HOLD";
+  const status = exec.status || "—";
+  const cls = status === "SETTLED" || status === "FILLED" ? "ok"
+            : (status === "VETO" || status === "REVERTED" || status === "REJECTED") ? "no" : "";
+  const link = exec.tx_hash && explorer
+    ? `<a href="${explorer}/tx/${exec.tx_hash}" target="_blank" rel="noopener">${shortHash(exec.tx_hash)}</a>`
+    : "";
+  const tr = document.createElement("tr");
+  if (fresh) tr.className = "fresh";
+  tr.innerHTML = `
+    <td>${row.tick ?? ""}</td>
+    <td>${clock(row.wall_time)}</td>
+    <td>${row.product ?? ""}/WETH</td>
+    <td class="side ${side}">${side}</td>
+    <td>${fmtPrice(quote.bid)}</td>
+    <td>${fmtPrice(quote.ask)}</td>
+    <td><span class="pill ${cls}">${status}</span> ${link}</td>
+    <td>${exec.fee_wei ? fmtWei(exec.fee_wei, 8) : "—"}</td>`;
+  const feed = $("feed");
+  feed.prepend(tr);
+  while (feed.children.length > 200) feed.lastElementChild.remove();
+  $("feed-empty").hidden = true;
+
+  $("equity").textContent = fmtDec(row.equity_usdc ?? row.equity_weth, 6);
+  $("n-diff").textContent = neural.difference_hz !== undefined ? Number(neural.difference_hz).toFixed(3) : "—";
+  $("n-gate").textContent = neural.gate_spikes ?? "—";
+  $("n-stim").textContent = neural.stimulus ?? "—";
+  $("n-mem").textContent = (neural.memory && neural.memory.changed_edges) ?? "—";
+  $("frame").src = "/latest-input.png?t=" + Date.now();
+  lastTick = Math.max(lastTick, Number(row.tick) || 0);
+}
+
+function connected(on) {
+  $("dot").className = on ? "dot on" : "dot";
+  $("conn").textContent = on ? "live" : "reconnecting";
+}
+
+async function bootstrap() {
+  try {
+    renderState(await (await fetch("/api/state")).json());
+    const { trades } = await (await fetch("/api/trades")).json();
+    trades.forEach((row) => renderTrade(row, false));
+  } catch { /* the stream retry below covers a cold start */ }
+}
+
+function stream() {
+  // Resume from the last tick already rendered so a reconnect misses nothing.
+  const es = new EventSource("/api/stream?since=" + lastTick);
+  es.addEventListener("open", () => connected(true));
+  es.addEventListener("state", (e) => renderState(JSON.parse(e.data)));
+  es.addEventListener("trade", (e) => {
+    const row = JSON.parse(e.data);
+    if ((Number(row.tick) || 0) > lastTick) renderTrade(row, true);
+  });
+  es.addEventListener("error", () => {
+    connected(false);
+    es.close();
+    setTimeout(stream, 3000);
+  });
+}
+
+bootstrap().then(stream);
+</script>
+</body>
+</html>

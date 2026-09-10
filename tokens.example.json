@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "Contract registry for StonkFlyRH. Copy to tokens.json and fill in.",
+    "No address is shipped in this repository. Look each one up yourself on the",
+    "Robinhood Chain explorer and on the Uniswap deployments page, then run",
+    "`python -m stonkflyrh chain verify` — it refuses any address that holds no",
+    "code, a router and quoter that disagree about their factory, a token whose",
+    "on-chain symbol or decimals differ from what you wrote here, and any pair",
+    "with no pool at the configured fee tier.",
+    "pool_fee is the Uniswap v3 tier in hundredths of a bip: 500, 3000 or 10000."
+  ],
+  "robinhood-mainnet": {
+    "quote": {
+      "symbol": "WETH",
+      "address": "0x0000000000000000000000000000000000000000",
+      "decimals": 18
+    },
+    "router": "0x0000000000000000000000000000000000000000",
+    "quoter": "0x0000000000000000000000000000000000000000",
+    "tokens": {
+      "DOGE": {
+        "address": "0x0000000000000000000000000000000000000000",
+        "decimals": 18,
+        "pool_fee": 10000
+      }
+    }
+  },
+  "robinhood-testnet": {
+    "quote": {
+      "symbol": "WETH",
+      "address": "0x0000000000000000000000000000000000000000",
+      "decimals": 18
+    },
+    "router": "0x0000000000000000000000000000000000000000",
+    "quoter": "0x0000000000000000000000000000000000000000",
+    "tokens": {}
+  }
+}

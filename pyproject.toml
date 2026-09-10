@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stonkflyrh"
+version = "0.1.0"
+description = "A fly-connectome controller trading Robinhood Chain memecoins through a guarded Uniswap v3 action"
+requires-python = ">=3.11"
+dependencies = [
+  "web3==8.0.0", "eth-account==0.14.0", "eth-utils==6.0.0",
+  "numpy==2.4.6", "pandas==3.0.5", "pyarrow==25.0.1", "Pillow==12.3.0",
+  "pydantic==2.13.5", "python-dotenv==1.2.3"
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+
+[project.scripts]
+stonkflyrh = "stonkflyrh.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["stonkflyrh*"]
+
+[tool.setuptools.package-data]
+"stonkflyrh.neural" = ["*.cpp", "*.json"]
+"stonkflyrh.web" = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
