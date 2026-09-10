@@ -1,6 +1,6 @@
 # Donations and the 50% share
 
-Off by default. `STONKFLYRH_DONATIONS=1` turns it on for a live run.
+On by default for live runs; `STONKFLYRH_DONATIONS=0` turns it off. A paper run shows the panel marked "not accepting yet".
 
 ## Read this first
 

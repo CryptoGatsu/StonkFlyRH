@@ -178,6 +178,10 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(url.query)
         if route in ("/", "/index.html"):
             return self._file(STATIC / "index.html")
+        if route == "/favicon.ico":
+            # Browsers ask for this on their own; hand them the same icon.
+            png = STATIC / "favicon.png"
+            return self._file(png if png.exists() else STATIC / "favicon.svg")
         if route == "/api/state":
             return self._json(snapshot(self.out))
         if route == "/api/trades":

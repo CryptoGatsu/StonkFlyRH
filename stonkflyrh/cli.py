@@ -367,7 +367,7 @@ def cmd_start(a, parser):
     r.no_screen = os.environ.get("STONKFLYRH_SCREEN", "1") != "1"
     r.no_adapt = os.environ.get("STONKFLYRH_ADAPT", "1") != "1"
     r.no_discovery = os.environ.get("STONKFLYRH_DISCOVERY", "1") != "1"
-    r.donations = os.environ.get("STONKFLYRH_DONATIONS", "0") == "1"
+    r.donations = os.environ.get("STONKFLYRH_DONATIONS", "1") == "1"
     r.out = out
     r.network = None
     r.tokens = None

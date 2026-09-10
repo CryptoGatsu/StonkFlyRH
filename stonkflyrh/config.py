@@ -97,7 +97,7 @@ class Settings:
     max_products: int = 12
 
     # -- donations ----------------------------------------------------------
-    donations_enabled: bool = False
+    donations_enabled: bool = True
     donor_share: str = "0.5"
     donation_min_usd: str = "1"
     donor_min_payout_usd: str = "1"
