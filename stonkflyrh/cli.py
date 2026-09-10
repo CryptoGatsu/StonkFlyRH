@@ -51,6 +51,9 @@ def build_parser():
     fees.add_argument("--minimum", type=str, default=None)
     fees.add_argument("--tokens", type=Path)
 
+    donors = sub.add_parser("donors", help="Show the pool: who holds what and who is owed")
+    donors.add_argument("--out", type=Path, default=Path("runs/live"))
+
     serve = sub.add_parser("serve", help="Serve the live trade website")
     serve.add_argument("--out", type=Path, default=Path("runs/paper"))
     serve.add_argument("--host", default="127.0.0.1")
@@ -96,6 +99,7 @@ def build_parser():
     run.add_argument("--no-screen", action="store_true", help="Disable the rug screen")
     run.add_argument("--no-adapt", action="store_true", help="Disable market adaptation")
     run.add_argument("--no-discovery", action="store_true", help="Trade only the listed tokens")
+    run.add_argument("--donations", action="store_true", help="Recognise USDG donations and pay donors their share")
     run.add_argument("--out", type=Path)
     run.add_argument("--network", choices=sorted(NETWORKS), default=None)
     run.add_argument("--tokens", type=Path)
@@ -131,6 +135,9 @@ def settings_from(args, net_key):
         screen_enabled=not args.no_screen,
         adapt_enabled=not args.no_adapt,
         discovery_enabled=not getattr(args, "no_discovery", False),
+        donations_enabled=bool(getattr(args, "donations", False)),
+        donor_share=os.environ.get("STONKFLYRH_DONOR_SHARE", "0.5"),
+        max_pool_usd=os.environ.get("STONKFLYRH_MAX_POOL_USD", "1000"),
         neural_ms=args.neural_ms,
         pulse_ms=min(200, args.neural_ms / 2),
     )
@@ -360,6 +367,7 @@ def cmd_start(a, parser):
     r.no_screen = os.environ.get("STONKFLYRH_SCREEN", "1") != "1"
     r.no_adapt = os.environ.get("STONKFLYRH_ADAPT", "1") != "1"
     r.no_discovery = os.environ.get("STONKFLYRH_DISCOVERY", "1") != "1"
+    r.donations = os.environ.get("STONKFLYRH_DONATIONS", "0") == "1"
     r.out = out
     r.network = None
     r.tokens = None
@@ -371,6 +379,26 @@ def cmd_start(a, parser):
                 "order_limit_usd": r.order_limit_usd,
                 "site": "python -m stonkflyrh serve --out " + str(out)})
     return cmd_run(r, parser)
+
+
+def cmd_donors(a):
+    from .ledger import Ledger
+    from .pool import Pool
+
+    settings, meta = run_settings(a.out)
+    ledger = Ledger(a.out / "ledger.sqlite", settings, meta["mode"])
+    try:
+        pool = Pool(ledger, settings.donor_share)
+        equity = D(meta.get("equity_usd") or ledger.cash)
+        print(json.dumps({
+            **pool.report(equity),
+            "equity_usd": str(equity),
+            "deposited_total": meta.get("deposited_total", "0"),
+            "withdrawn_total": meta.get("withdrawn_total", "0"),
+            "recent_payouts": pool.payouts(10),
+        }, indent=2))
+    finally:
+        ledger.close()
 
 
 def cmd_serve(a):
@@ -480,6 +508,7 @@ def cmd_run(a, parser):
         "live" if a.live else "paper",
         capital=D(settings.capital_usd),
     )
+    donations = None
     try:
         if a.live:
             broker = RobinhoodChainBroker.from_env(
@@ -487,6 +516,23 @@ def cmd_run(a, parser):
             )
         else:
             broker = PaperBroker(settings, ledger, {"trading": wallet_address("trading")})
+        if settings.donations_enabled:
+            from .donations import Donations, FixtureDonations
+            from .pool import Pool
+
+            pool = Pool(ledger, settings.donor_share)
+            pool.seed_operator(D(ledger.get("initial_cash")), time.time())
+            if a.live:
+                donations = Donations(
+                    settings, ledger, pool, client, registry, broker.account, broker.address
+                )
+                donations.start_at_head(time.time())
+                broker.inflows = lambda: donations.ingest(
+                    time.time(), oracle.eth_usd(), ledger.last_marks()
+                )
+            elif a.fixture:
+                donations = FixtureDonations(settings, ledger, pool)
+            ledger.put("pool", pool.report(D(ledger.get("equity_usd") or ledger.cash)))
         result = broker.preflight(eth_usd)
         print(json.dumps({**result, "eth_usd": str(eth_usd)}), flush=True)
         if a.resume_reviewed:
@@ -500,7 +546,7 @@ def cmd_run(a, parser):
             ledger.put("halted", None)
         if a.preflight_only:
             return
-        _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified)
+        _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations)
     except KeyboardInterrupt:
         print("Stopped; run state preserved.", flush=True)
     except Exception as e:
@@ -530,7 +576,7 @@ def cmd_run(a, parser):
         lock.close()
 
 
-def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified):
+def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registry, verified, donations=None):
     from PIL import Image
 
     from .actions import StonkflyRHActions
@@ -602,6 +648,14 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             "interval_seconds": settings.discovery_interval_seconds,
             "max_products": settings.max_products,
         },
+        "donations": {
+            "enabled": donations is not None,
+            "donor_share": settings.donor_share,
+            "min_usd": settings.donation_min_usd,
+            "payout_interval_seconds": settings.donor_payout_interval_seconds,
+            "max_pool_usd": settings.max_pool_usd,
+            "address": wallet_address("trading") if a.live else None,
+        },
         "decoder": "DNp20 mean R-L: buy/sell; DNpe017 spike gate; otherwise hold. "
         "Engineered fixed mapping.",
         "learning_validated": False,
@@ -664,8 +718,18 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         market.record(quotes)
         product = universe[ledger.get("tick") % len(universe)]
         q = quotes[product]
+        inflows = payouts = None
+        if donations is not None:
+            # Fixture donations arrive here; live ones were booked by the
+            # broker's balance check. Payouts settle high-water crossings.
+            if a.fixture:
+                inflows = donations.ingest(time.time(), eth_usd, quotes) or None
+            if donations.due(time.time()):
+                payouts = donations.pay(time.time(), eth_usd, quotes) or None
         equity = ledger.equity(quotes, eth_usd)
         ledger.put("equity_usd", str(equity))
+        if donations is not None:
+            ledger.put("pool", donations.pool.report(equity))
 
         # A rug is checked before reinforcement so its longer aversive pulse
         # replaces, rather than follows, this observation's ordinary loss pulse.
@@ -745,6 +809,8 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             "screen": screen_json,
             "rug": rug,
             "discovery": scan,
+            "donations": inflows,
+            "donor_payouts": payouts,
             "execution": order,
         }
         with (out / "events.jsonl").open("a") as f:

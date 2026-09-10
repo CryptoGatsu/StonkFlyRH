@@ -56,6 +56,13 @@ def read_meta(out):
             for r in db.execute("SELECT report FROM discovery ORDER BY id DESC LIMIT 12")
         ]
         candidates = db.execute("SELECT COUNT(*) FROM candidates").fetchone()[0]
+        donor_events = [
+            json.loads(r[0])
+            for r in db.execute(
+                "SELECT payload FROM events WHERE kind IN ('donations','donor_payouts') "
+                "ORDER BY id DESC LIMIT 20"
+            )
+        ]
         payouts = [
             {
                 "created": r[0],
@@ -84,6 +91,7 @@ def read_meta(out):
     meta["screens"] = screens
     meta["discovery"] = discovery
     meta["candidates_screened"] = int(candidates)
+    meta["donor_events"] = donor_events
     return meta
 
 
@@ -122,6 +130,7 @@ def snapshot(out):
                     "usd_reference",
                     "screen",
                     "discovery",
+                    "donations",
                     "settings",
                 ]
             }

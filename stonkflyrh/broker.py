@@ -112,6 +112,9 @@ class RobinhoodChainBroker:
         self.fee_wallet = checksum(fee_wallet)
         self.router = client.contract(registry.router, ROUTER_ABI)
         self.quote_token = client.erc20(registry.quote_address)
+        # Called before every balance check so recognised donations are booked
+        # as deposits before the wallet is compared with the ledger.
+        self.inflows = None
 
     @classmethod
     def from_env(cls, settings, ledger, client, registry, verified):
@@ -167,7 +170,9 @@ class RobinhoodChainBroker:
         }
 
     def verify_balances(self):
-        """Reject external deposits and withdrawals rather than book them as P&L."""
+        """Reject unexplained deposits and withdrawals rather than book them as P&L."""
+        if self.inflows is not None:
+            self.inflows()
         expected = self.expected()
         actual_quote = int(self.quote_token.functions.balanceOf(self.address).call())
         # A few units of tolerance absorb truncation in the wei conversions.

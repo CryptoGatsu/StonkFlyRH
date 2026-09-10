@@ -156,6 +156,18 @@
   .kv span { color: var(--muted); } .kv b { font-weight: 500; text-align: right; word-break: break-all; }
   .addr { font-size: 11px; color: var(--muted); word-break: break-all; }
 
+  .donate { border: 1px solid var(--lime); background: var(--raise); padding: 14px 16px; margin: 14px 0 6px; box-shadow: 4px 4px 0 #000; }
+  .donate-copy { margin: 0 0 12px; font-size: 12px; line-height: 1.7; color: var(--ink); }
+  .donate-copy b { color: var(--lime); font-weight: 600; }
+  .addr-box { display: flex; gap: 8px; align-items: center; background: var(--bg); border: 1px solid var(--line); padding: 10px 12px; }
+  .addr-box code { flex: 1; font-size: 12px; word-break: break-all; color: var(--ink); }
+  button.chip.dark { background: var(--lime); color: var(--lime-ink); border-color: var(--lime); box-shadow: 2px 2px 0 #000; }
+  .donate-terms { color: var(--muted); font-size: 11px; margin-top: 10px; line-height: 1.6; }
+  .d-row { display: grid; grid-template-columns: minmax(0,1.3fr) repeat(3, minmax(70px, auto)); gap: 8px 14px; border-top: 1px solid var(--line-soft); padding: 12px 0; align-items: baseline; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .d-row:first-child { border-top: 0; }
+  .d-row .k { color: var(--muted); font-size: 11px; }
+  .d-row .r { text-align: right; }
+  .d-head { color: var(--muted); font: 700 9px/1 var(--pixel); letter-spacing: .12em; padding-bottom: 6px; border-top: 0; }
   .banner { display: none; margin-bottom: 18px; padding: 10px 14px; border: 1px solid var(--line); background: var(--panel);
             color: var(--muted); font-size: 12px; box-shadow: 4px 4px 0 #000; }
   .banner[data-on] { display: block; } .banner b { color: var(--ink); font-weight: 500; }
@@ -226,6 +238,7 @@
           <button class="tab" role="tab" aria-selected="false" data-pane="decisions">Decisions</button>
           <button class="tab" role="tab" aria-selected="false" data-pane="screen">Screen</button>
           <button class="tab" role="tab" aria-selected="false" data-pane="universe">Universe <span id="n-universe">0</span></button>
+          <button class="tab" role="tab" aria-selected="false" data-pane="donors" id="tab-donors" hidden>Donors <span id="n-donors">0</span></button>
           <span class="obs">OBS <span id="obs">0</span></span>
         </div>
 
@@ -249,6 +262,19 @@
         <div class="pane" id="pane-universe" hidden>
           <div id="universe"><div class="empty">No tokens in the universe yet.</div></div>
         </div>
+        <div class="pane" id="pane-donors" hidden>
+          <div id="donors"><div class="empty">No donors yet.</div></div>
+        </div>
+
+        <section class="donate" id="donate" hidden>
+          <div class="row-head"><span class="label ink">Feed the fly</span><span class="right" id="pool-cap">—</span></div>
+          <p class="donate-copy">Send <b>USDG on Robinhood Chain</b> to the fly wallet and it trades alongside the operator's stake. When your stake sets a new high, <b id="share-pct">50%</b> of the gain is sent back to the wallet you sent from; the rest stays with the fly. Below your high-water mark nothing is paid, and losses are yours.</p>
+          <div class="addr-box">
+            <code id="donate-addr">—</code>
+            <button class="chip dark" type="button" id="copy-addr">Copy</button>
+          </div>
+          <div class="donate-terms">Send from a wallet you control — payouts go back to the sending address. Minimum <span id="min-don">$1</span>; less is kept as a gift. This is an experiment, not an offer or advice; you can lose everything you send.</div>
+        </section>
 
         <details>
           <summary><span class="label ink">Performance &amp; limits</span><span class="plus">+</span></summary>
@@ -426,12 +452,48 @@ function renderUniverse() {
   $("universe").innerHTML = rows.join("") + log;
 }
 
+function renderDonations() {
+  const conf = prov.donations || {};
+  const on = !!conf.enabled;
+  $("donate").hidden = !on;
+  $("tab-donors").hidden = !on;
+  if (!on) return;
+  const share = Math.round(Number(conf.donor_share ?? settings.donor_share ?? 0.5) * 100);
+  $("share-pct").textContent = share + "%";
+  $("min-don").textContent = usd(conf.min_usd ?? settings.donation_min_usd ?? 1, 0);
+  const address = conf.address || (prov.wallets && prov.wallets.fly) || "";
+  $("donate-addr").textContent = address || "fly wallet not imported yet";
+  const pool = meta.pool || {};
+  const cap = Number(conf.max_pool_usd ?? settings.max_pool_usd);
+  const contributed = Number(meta.initial_cash);
+  $("pool-cap").textContent = Number.isFinite(cap) && Number.isFinite(contributed)
+    ? `${usd(contributed, 0)} of ${usd(cap, 0)} pool` : "";
+  const rows = (pool.participants || []).filter((p) => p.address !== "operator")
+    .sort((a, b) => Number(b.value) - Number(a.value));
+  $("n-donors").textContent = rows.length;
+  if (!rows.length) { $("donors").innerHTML = `<div class="empty">No donors yet. NAV ${pool.nav ? Number(pool.nav).toFixed(4) : "—"} per unit.</div>`; return; }
+  const head = `<div class="d-row d-head"><span>Donor</span><span class="r">Stake</span><span class="r">Now</span><span class="r">Paid</span></div>`;
+  const body = rows.map((p) => {
+    const up = Number(p.unrealised) >= 0;
+    const link = explorer ? `<a href="${esc(explorer)}/address/${esc(p.address)}" target="_blank" rel="noopener">${shortHash(p.address)}</a>` : shortHash(p.address);
+    return `<div class="d-row"><span>${link}<div class="k">since ${clock(p.first_seen)} · mark ${Number(p.hwm).toFixed(4)}</div></span>
+      <span class="r">${usd(p.deposited)}</span>
+      <span class="r">${usd(p.value)}<div class="k ${up ? "BUY" : "SELL"}">${signed(p.unrealised)} vs mark</div></span>
+      <span class="r">${usd(p.paid_out)}</span></div>`;
+  }).join("");
+  const nav = `<div class="u-log">NAV ${Number(pool.nav).toFixed(4)} per unit · ${Number(pool.units).toLocaleString(undefined, {maximumFractionDigits: 0})} units · donors are paid ${share}% of gains above their own mark, hourly, when cash allows</div>`;
+  $("donors").innerHTML = head + body + nav;
+}
+$("copy-addr").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("donate-addr").textContent); $("copy-addr").textContent = "Copied"; setTimeout(() => $("copy-addr").textContent = "Copy", 1500); } catch {}
+});
+
 function renderState(s) {
   meta = s.meta || {}; prov = s.provenance || {}; settings = prov.settings || {};
   explorer = (prov.network && prov.network.explorer) || null;
   quoteSymbol = settings.quote_symbol || "USDG";
   $("quote-sym").textContent = quoteSymbol;
-  renderBag(); renderLimits(); renderScreens(); renderUniverse();
+  renderBag(); renderLimits(); renderScreens(); renderUniverse(); renderDonations();
 }
 
 /* ---------------- rows ---------------- */
@@ -462,7 +524,7 @@ function decisionRow(row, fresh) {
   const sc = row.screen && row.screen.checks ? `<span class="pill ${row.screen.approved ? "ok" : "no"}">${row.screen.checks.filter((c) => c.passed).length}/${row.screen.checks.length}</span>` : `<span class="pill">—</span>`;
   const tr = document.createElement("tr"); if (fresh) tr.className = "fresh";
   tr.innerHTML = `<td>${clock(row.wall_time)}<span class="k">#${esc(row.tick)}</span></td>
-    <td><span class="side ${esc(side)}">${esc(side)}</span>${row.rug ? `<span class="k" style="color:var(--pink)">rug detected</span>` : n.stimulus ? `<span class="k">${esc(n.stimulus)} input</span>` : ""}</td>
+    <td><span class="side ${esc(side)}">${esc(side)}</span>${row.rug ? `<span class="k" style="color:var(--pink)">rug detected</span>` : n.stimulus ? `<span class="k">${esc(n.stimulus)} input</span>` : ""}${row.donations ? `<span class="k" style="color:var(--lime)">${row.donations.length} donation${row.donations.length === 1 ? "" : "s"} received</span>` : ""}${row.donor_payouts ? `<span class="k" style="color:var(--cyan)">${row.donor_payouts.length} donor payout${row.donor_payouts.length === 1 ? "" : "s"}</span>` : ""}</td>
     <td>${esc(row.product)}</td><td class="r">${price(q.bid)}<span class="k">${price(q.ask)}</span></td><td class="r">${sc}</td>
     <td class="r"><span class="pill ${cls}" title="${esc(ex.reason || "")}">${esc(status)}</span>${ex.reason ? `<span class="k" style="max-width:220px;white-space:normal">${esc(ex.reason)}</span>` : ""}</td>`;
   const body = $("decisions"); body.prepend(tr); while (body.children.length > 150) body.lastElementChild.remove();

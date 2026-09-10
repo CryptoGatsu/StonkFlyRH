@@ -116,14 +116,14 @@ class Donations:
             # Equity without this money: it is already in the wallet balance the
             # caller measured, so the pool prices units off the pre-deposit value.
             equity_before = self.l.equity(quotes, eth_usd) if quotes else self.l.cash
-            record = self.l.deposit(amount, now)
-            if record is None:
-                continue
             address = sender if amount >= D(self.s.donation_min_usd) else "operator"
+            # The pool is the record of what has been seen: a transfer it already
+            # holds is not booked into the ledger a second time.
             entry = self.pool.deposit(
                 address, amount, equity_before, now, tx_hash, index, int(log["blockNumber"])
             )
             if entry is not None:
+                self.l.deposit(amount, now)
                 booked.append(
                     {
                         "address": sender,

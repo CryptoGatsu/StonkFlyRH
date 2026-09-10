@@ -12,4 +12,5 @@
 - Adaptation only removes options: size can shrink, buys can stop, cooldowns can stretch. Nothing adapts a position past the configured cap, and nothing adapts a sell.
 - Discovery only changes what the fly may see: new quote-asset pools from the factory, each screened before admission, seeds never dropped, blocklisted symbols never readmitted. It never proposes a trade.
 - The website is read-only. It may not import the broker, open the keystore, hold a key, or expose a route that changes run state.
+- Donations are recognised from Transfer logs, never assumed from a balance; every one is booked as a deposit (not profit) and as pool units at NAV. Payouts move value by units so NAV is unchanged, never sell a position, and record intent and hash before broadcast. The feature ships off.
 - Keep README short. Detailed model and execution caveats belong in docs.

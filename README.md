@@ -21,6 +21,13 @@ These are engineered reinforcement signals, **not modeled pain receptors**. Syna
 changes do not establish that it learns to trade profitably. [Model](docs/model.md) ·
 [Rug screen](docs/safety.md).
 
+## Donations
+
+Off by default. With `STONKFLYRH_DONATIONS=1`, USDG sent to the fly wallet is
+recognised as a stake in a unitised pool, and donors are paid 50% of gains above
+their own high-water mark in USDG; the operator keeps the rest. Losses are the
+donor's until a new high. [How it works, and why to ask a lawyer first](docs/donations.md).
+
 ## Start it
 
 ```sh

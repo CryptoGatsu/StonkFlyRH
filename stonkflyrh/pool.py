@@ -17,6 +17,8 @@ All quantities are Decimal; units are scaled so 1 unit = 1 USDG at the start.
 """
 
 
+import uuid
+
 from .config import D
 
 OPERATOR = "operator"
@@ -94,7 +96,7 @@ class Pool:
             "INSERT OR REPLACE INTO participants VALUES (?,?,?,?,?,?,?)",
             (
                 p["address"],
-                str(q(p["units"])),
+                str(p["units"]),
                 str(p["hwm"]),
                 str(p["deposited"]),
                 str(p["paid_out"]),
@@ -134,6 +136,10 @@ class Pool:
             "SELECT 1 FROM deposits WHERE tx_hash=? AND log_index=?", (tx_hash, log_index)
         ).fetchone():
             return None
+        if not tx_hash:
+            # A deposit with no on-chain hash (fixtures, the operator's stake)
+            # still gets a unique row.
+            tx_hash = "local:" + uuid.uuid4().hex
         nav = self.nav(equity_before)
         units = amount / nav
         p = self.participant(address) or {

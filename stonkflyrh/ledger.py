@@ -356,6 +356,18 @@ class Ledger:
             self.put("withdrawn_total", str(D(self.get("withdrawn_total") or 0) + amount))
         return {"amount": str(amount), "at": now}
 
+    def last_marks(self):
+        """Bid-like marks from the last observation, for valuing positions when
+        no fresh quotes exist yet (a deposit noticed at preflight)."""
+        observation = self.get("observation") or {}
+        history = observation.get("market_history") or {}
+
+        class Mark:
+            def __init__(self, bid):
+                self.bid = bid
+
+        return {p: Mark(D(str(h[-1]))) for p, h in history.items() if h}
+
     def record_event(self, kind, payload):
         self.db.execute(
             "INSERT INTO events(kind,at,payload) VALUES (?,?,?)",
