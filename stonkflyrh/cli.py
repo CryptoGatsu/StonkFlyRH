@@ -712,10 +712,22 @@ def cmd_run(a, parser):
             broker = PaperBroker(settings, ledger, {"trading": wallet_address("trading")})
         halted = ledger.get("halted")
         if halted and not a.resume_reviewed:
+            untouched = (
+                not ledger.get("tick")
+                and not ledger.pending()
+                and not ledger.db.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+                and not (a.live and ledger.get("live_initialized"))
+            )
             if halted in TRANSIENT_HALTS and not ledger.pending():
                 # A network failure stopped the last process. Nothing about the
                 # money is in question; carry on.
                 print(json.dumps({"resumed_after": halted}), flush=True)
+                ledger.put("halted", None)
+            elif untouched:
+                # The run never got past setup (a preflight refusal, a missing
+                # file): no money has moved, so a fixed .env deserves a fresh
+                # attempt rather than a replay of the old halt.
+                print(json.dumps({"retrying_setup_after": halted}), flush=True)
                 ledger.put("halted", None)
             else:
                 print(
