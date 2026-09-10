@@ -108,19 +108,56 @@ class Pool:
     # -- deposits -------------------------------------------------------------
 
     def seed_operator(self, capital, now):
-        """The operator's own stake: the first units, at 1 USDG each."""
-        if self.participant(OPERATOR) is None and D(capital) > 0:
+        """The operator's own stake: the first units, at 1 USDG each.
+
+        While the operator is alone in the pool and nothing has been deposited,
+        the stake follows the starting balance: a live run only learns that
+        balance at preflight, after the placeholder capital seeded the pool.
+        """
+        capital = D(capital)
+        if capital <= 0:
+            return
+        existing = self.participant(OPERATOR)
+        alone = len(self.participants()) == (1 if existing else 0)
+        deposits = self.db.execute("SELECT COUNT(*) FROM deposits").fetchone()[0]
+        if existing is None or (alone and not deposits and existing["units"] != capital):
             self._write(
                 {
                     "address": OPERATOR,
-                    "units": D(capital),
+                    "units": capital,
                     "hwm": D(1),
-                    "deposited": D(capital),
+                    "deposited": capital,
                     "paid_out": D(0),
-                    "first_seen": now,
+                    "first_seen": existing["first_seen"] if existing else now,
                     "last_settled": now,
                 }
             )
+
+    def reassign(self, address, amount, equity, now, tx_hash, log_index=0, block=None):
+        """Move `amount` of value out of the operator's stake to a donor.
+
+        For money that arrived before the run started and was therefore booked
+        as the operator's capital. Units change hands at the current NAV, so
+        the total stays put and nobody else's value moves. Idempotent per
+        (tx_hash, log_index).
+        """
+        amount = D(amount)
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+        if self.db.execute(
+            "SELECT 1 FROM deposits WHERE tx_hash=? AND log_index=?", (tx_hash, log_index)
+        ).fetchone():
+            return None
+        operator = self.participant(OPERATOR)
+        nav = self.nav(equity)
+        units = amount / nav
+        if operator is None or operator["units"] < units:
+            raise ValueError("The operator's stake does not cover that amount")
+        operator["units"] -= units
+        operator["deposited"] = max(D(0), operator["deposited"] - amount)
+        self._write(operator)
+        entry = self.deposit(address, amount, D(equity) - amount, now, tx_hash, log_index, block)
+        return entry
 
     def deposit(self, address, amount, equity_before, now, tx_hash="", log_index=0, block=None):
         """Book an inbound amount as units bought at the current NAV.

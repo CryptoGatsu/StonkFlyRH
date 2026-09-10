@@ -68,6 +68,16 @@ money past the cap is still booked and still trades at the same cadence.
 
 ```sh
 python -m stonkflyrh donors --out runs/live      # who holds what, who is owed
+python -m stonkflyrh donors --out runs/live --credit 0x<tx hash>
 ```
+
+**A donation that arrived before the run started** is not seen by the worker: a
+fresh live ledger counts everything in the wallet at preflight as the operator's
+stake and only watches for transfers from then on. `--credit` takes the transaction
+hash of such a transfer, reads its USDG `Transfer` to the fly wallet and moves that
+amount out of the operator's units to the sender at the current NAV. Nothing about
+the ledger's cash changes (the money was already there); the donor is simply on the
+books from that point. It is idempotent per transfer. Stop the worker first, or run it
+between ticks; the write is short.
 
 The DONORS tab on the site shows the same, live.

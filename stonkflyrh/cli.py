@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .chain import NETWORKS, network
 from .config import D, Settings
+from .wallet import FLY_WALLET
 
 
 def build_parser():
@@ -56,6 +57,14 @@ def build_parser():
 
     donors = sub.add_parser("donors", help="Show the pool: who holds what and who is owed")
     donors.add_argument("--out", type=Path, default=Path("runs/live"))
+    donors.add_argument(
+        "--credit",
+        metavar="TX_HASH",
+        help="Book a USDG transfer that arrived before the run started as a donation "
+             "from its sender (the money is moved out of the operator's stake)",
+    )
+    donors.add_argument("--network", default=os.environ.get("STONKFLYRH_NETWORK", "robinhood"))
+    donors.add_argument("--tokens", type=Path, default=Path("tokens.json"))
 
     serve = sub.add_parser("serve", help="Serve the live trade website")
     serve.add_argument("--out", type=Path, default=Path("runs/paper"))
@@ -407,11 +416,24 @@ def cmd_discovery(a):
             if not c.get("passed"):
                 failed[c["name"]] = failed.get(c["name"], 0) + 1
     unrouted = meta.get("unrouted_v4") or []
+    error = None
+    err_path = a.out / "error.json"
+    if err_path.exists():
+        try:
+            error = json.loads(err_path.read_text())
+        except json.JSONDecodeError:
+            error = {"raw": err_path.read_text()[:400]}
     print(json.dumps({
+        "mode": meta.get("mode"),
+        "tick": meta.get("tick"),
+        "live_initialized": bool(meta.get("live_initialized")),
+        "halted": meta.get("halted"),
+        "last_error": error,
         "scanned_to_block": meta.get("discovery_block"),
         "backlog_blocks": meta.get("discovery_backlog"),
         "universe": list((meta.get("universe") or {}).keys()),
         "bridges": {k: v.get("symbol") for k, v in (meta.get("bridges") or {}).items()},
+        "candidates_pending": len(meta.get("pending_candidates") or []),
         "candidates_screened": candidates,
         "candidate_outcomes": dict(sorted(outcomes.items(), key=lambda kv: -kv[1])[:12]),
         "screen_checks_failed": failed,
@@ -438,7 +460,26 @@ def cmd_donors(a):
     try:
         pool = Pool(ledger, settings.donor_share)
         equity = D(meta.get("equity_usd") or ledger.cash)
+        credited = None
+        if a.credit:
+            if meta["mode"] != "live":
+                raise RuntimeError("Only a live run has on-chain donations to credit")
+            from .donations import Donations
+            from .wallet import address as wallet_address
+
+            _, client, registry, _ = chain_context(a.network, a.tokens, [])
+            fly = wallet_address("trading") or FLY_WALLET
+            donations = Donations(settings, ledger, pool, client, registry, None, fly)
+            with ledger.transaction():
+                credited = donations.credit_transfer(a.credit, time.time(), equity)
+            if not credited:
+                raise RuntimeError(
+                    "No USDG transfer to the fly wallet in that transaction, or it is "
+                    "already booked"
+                )
+            ledger.put("pool", pool.report(equity))
         print(json.dumps({
+            "credited": credited,
             **pool.report(equity),
             "equity_usd": str(equity),
             "deposited_total": meta.get("deposited_total", "0"),
@@ -598,23 +639,6 @@ def cmd_run(a, parser):
             broker.routes = market.routes
         else:
             broker = PaperBroker(settings, ledger, {"trading": wallet_address("trading")})
-        if settings.donations_enabled:
-            from .donations import Donations, FixtureDonations
-            from .pool import Pool
-
-            pool = Pool(ledger, settings.donor_share)
-            pool.seed_operator(D(ledger.get("initial_cash")), time.time())
-            if a.live:
-                donations = Donations(
-                    settings, ledger, pool, client, registry, broker.account, broker.address
-                )
-                donations.start_at_head(time.time())
-                broker.inflows = lambda: donations.ingest(
-                    time.time(), oracle.eth_usd(), ledger.last_marks()
-                )
-            elif a.fixture:
-                donations = FixtureDonations(settings, ledger, pool)
-            ledger.put("pool", pool.report(D(ledger.get("equity_usd") or ledger.cash)))
         halted = ledger.get("halted")
         if halted and not a.resume_reviewed:
             if halted in TRANSIENT_HALTS and not ledger.pending():
@@ -634,6 +658,25 @@ def cmd_run(a, parser):
                 return
         result = broker.preflight(eth_usd)
         print(json.dumps({**result, "eth_usd": str(eth_usd)}), flush=True)
+        if settings.donations_enabled:
+            # After preflight: a fresh live ledger only learns its real starting
+            # balance there, and the operator's units must equal it.
+            from .donations import Donations, FixtureDonations
+            from .pool import Pool
+
+            pool = Pool(ledger, settings.donor_share)
+            pool.seed_operator(D(ledger.get("initial_cash")), time.time())
+            if a.live:
+                donations = Donations(
+                    settings, ledger, pool, client, registry, broker.account, broker.address
+                )
+                donations.start_at_head(time.time())
+                broker.inflows = lambda: donations.ingest(
+                    time.time(), oracle.eth_usd(), ledger.last_marks()
+                )
+            elif a.fixture:
+                donations = FixtureDonations(settings, ledger, pool)
+            ledger.put("pool", pool.report(D(ledger.get("equity_usd") or ledger.cash)))
         if a.resume_reviewed:
             if (out / "STOP").exists() or ledger.pending():
                 raise RuntimeError(

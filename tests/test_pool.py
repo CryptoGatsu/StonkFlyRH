@@ -197,3 +197,48 @@ def test_the_loss_stop_scales_with_the_pool(tmp_path):
 def test_donation_settings_bounds(changes):
     with pytest.raises(ValueError):
         Settings(**changes)
+
+
+# -- money that arrived before the run ----------------------------------------
+
+
+def test_the_operator_stake_follows_the_real_starting_balance(tmp_path):
+    """A live ledger is seeded with the capital cap and only learns the wallet's
+    balance at preflight; the operator must not be left holding cap-sized units."""
+    ledger = Ledger(tmp_path / "ledger.sqlite", Settings(donations_enabled=True), "live", D("110"))
+    try:
+        p = Pool(ledger, "0.5")
+        p.seed_operator(D("110"), 0)
+        p.seed_operator(D("100.078"), 1)             # preflight found 100.078 USDG
+        assert p.participant(OPERATOR)["units"] == D("100.078")
+        assert p.nav(D("100.078")) == D(1)
+        # Once anyone else holds units the stake is history, not a placeholder.
+        p.deposit(ALICE, D("10"), D("100.078"), 2)
+        p.seed_operator(D("50"), 3)
+        assert p.participant(OPERATOR)["units"] == D("100.078")
+    finally:
+        ledger.close()
+
+
+def test_reassigning_a_pre_run_transfer_moves_value_not_units_total(pool):
+    p, _ = pool
+    # Alice's 10 USDG arrived before the run and sits inside the operator's 100.
+    before = p.units_total()
+    entry = p.reassign(ALICE, D("10"), D("100"), 1, "0xabc", 0, 90)
+    assert entry["units"] == D("10")
+    assert p.units_total() == before
+    assert value(p, ALICE, D("100")) == D("10")
+    assert value(p, OPERATOR, D("100")) == D("90")
+    assert p.participant(OPERATOR)["deposited"] == D("90")
+    # Booking the same transfer again does nothing.
+    assert p.reassign(ALICE, D("10"), D("100"), 2, "0xabc", 0, 90) is None
+    assert value(p, ALICE, D("100")) == D("10")
+    # And Alice is paid on gains above the NAV she was booked at.
+    owed = p.due(D("120"), 3, D(0))
+    assert [o["address"] for o in owed] == [ALICE] and owed[0]["gain"] == D("2")
+
+
+def test_reassigning_more_than_the_operator_holds_is_refused(pool):
+    p, _ = pool
+    with pytest.raises(ValueError, match="does not cover"):
+        p.reassign(ALICE, D("500"), D("100"), 1, "0xdef")

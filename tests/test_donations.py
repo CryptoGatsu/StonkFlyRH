@@ -231,3 +231,26 @@ def test_payout_conservation_end_to_end(tmp_path):
         assert (pool.participant(ALICE)["units"] * pool.nav(equity)).quantize(D("0.01")) == D("100")
     finally:
         ledger.close()
+
+
+def test_a_transfer_from_before_the_run_is_credited_by_hand(tmp_path):
+    """The operator points at the transaction; its sender becomes a donor and the
+    ledger's cash, which already held the money, does not move."""
+    settings, ledger, pool, d = build(tmp_path, [])
+    try:
+        log = transfer_log(ALICE, D("10"), "0x" + "77" * 32, block=40, index=3)
+        log["address"] = USDG
+        receipt = {"status": 1, "logs": [log], "transactionHash": "0x" + "77" * 32, "blockNumber": 40}
+        d.client.w3.eth.get_transaction_receipt = lambda h: receipt
+        cash_before = ledger.cash
+        booked = d.credit_transfer("0x" + "77" * 32, 5, D("100"))
+        assert [b["address"] for b in booked] == [checksum(ALICE)]
+        assert booked[0]["manual"] and booked[0]["units"] == "10"
+        assert ledger.cash == cash_before
+        assert pool.participant(checksum(ALICE))["units"] == D("10")
+        assert pool.participant(OPERATOR)["units"] == D("90")
+        assert pool.units_total() == D("100")
+        assert d.credit_transfer("0x" + "77" * 32, 6, D("100")) == []
+        assert ledger.events("donations")[0]["manual"] is True
+    finally:
+        ledger.close()

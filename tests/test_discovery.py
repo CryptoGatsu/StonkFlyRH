@@ -347,3 +347,68 @@ def test_the_fixture_discovery_adds_one_token_on_its_third_scan(tmp_path):
 
 def test_seed_lists_are_not_part_of_the_protocol_signature():
     assert Settings(products=("PONS",)).signature() == Settings(products=("PONS", "LONG")).signature()
+
+
+# -- a scan that dies half-way keeps what it reached -----------------------
+
+
+class FlakyChain(Chain):
+    """Rate-limits once, on the second log request, like a public RPC."""
+
+    def __init__(self, *a, fail_on=2, **kw):
+        super().__init__(*a, **kw)
+        self.calls = 0
+        self.fail_on = fail_on
+
+    def logs(self, params, **kw):
+        self.calls += 1
+        if self.calls == self.fail_on:
+            raise RuntimeError("429 Too Many Requests")
+        return super().logs(params, **kw)
+
+
+def test_progress_survives_an_rpc_error_mid_scan(tmp_path):
+    chain = FlakyChain([log_for(addr(60), 19500)], 20000, {addr(60): ("LATE", 18)},
+                       fail_on=3)
+    _, ledger, _, market, disc = build(tmp_path, chain, discovery_lookback_blocks=18000)
+    try:
+        with pytest.raises(RuntimeError, match="429"):
+            disc.scan(time.time(), ETH_USD)
+        # Two windows of 6000 blocks were fetched before the error; the block
+        # reached is on record and nothing before it is fetched again.
+        reached = ledger.get("discovery_block")
+        assert reached == 2000 + 2 * PoolDiscovery.WINDOW
+        chain.w3.eth.queries.clear()
+        report = disc.scan(time.time() + 61, ETH_USD)
+        assert chain.w3.eth.queries[0]["fromBlock"] == reached + 1
+        assert [a["symbol"] for a in report["added"]] == ["LATE"]
+        assert ledger.get("discovery_block") == 20000
+    finally:
+        ledger.close()
+
+
+def test_a_candidate_whose_screen_failed_stays_queued(tmp_path):
+    chain = Chain([log_for(addr(64), 1000), log_for(addr(65), 1100)], 1200,
+                  {addr(64): ("ONE", 18), addr(65): ("TWO", 18)})
+    _, ledger, _, market, disc = build(tmp_path, chain)
+    try:
+        real = disc.screen.assess
+        state = {"fail": True}
+
+        def flaky(*a, **kw):
+            if state["fail"]:
+                state["fail"] = False
+                raise ConnectionError("read timed out")
+            return real(*a, **kw)
+
+        disc.screen.assess = flaky
+        with pytest.raises(ConnectionError):
+            disc.scan(time.time(), ETH_USD)
+        pending = ledger.get("pending_candidates")
+        assert [c["token"].lower() for c in pending] == [addr(65).lower(), addr(64).lower()]
+        assert disc.due(time.time() + 61)                              # queued work is due soon
+        report = disc.scan(time.time() + 61, ETH_USD)
+        assert sorted(a["symbol"] for a in report["added"]) == ["ONE", "TWO"]
+        assert ledger.get("pending_candidates") == []
+    finally:
+        ledger.close()

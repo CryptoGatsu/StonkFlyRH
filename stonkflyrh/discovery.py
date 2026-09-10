@@ -87,6 +87,9 @@ class PoolDiscovery:
     # 400k-block backlog; spreading it keeps each scan to a handful of requests
     # against a public RPC that rate-limits.
     MAX_BLOCKS_PER_SCAN = 30000
+    # Progress is written to the ledger after every window, so a rate-limit
+    # error part-way through a scan costs at most one window, not the scan.
+    WINDOW = 6000
 
     def __init__(self, settings, client, registry, ledger, market, screen, factory, venue=None):
         self.s = settings
@@ -149,6 +152,15 @@ class PoolDiscovery:
         return checksum(hooks) in conf.get("hooks_allow", [])
 
     def scan(self, now, eth_usd):
+        """Advance the log scan, queue what it finds, screen a batch.
+
+        Two phases, each persisted as it goes. Fetching walks the chain in
+        windows and records the block reached after every window, so an RPC
+        error mid-scan resumes from the last window rather than the start.
+        Screening takes candidates from a queue in the ledger, one at a time,
+        so a candidate whose screen failed on a network error is still queued
+        on the next scan.
+        """
         self.last_scan = now
         head = int(self.client.w3.eth.block_number)
         start = self.l.get("discovery_block")
@@ -163,106 +175,136 @@ class PoolDiscovery:
             "rejected": [],
             "skipped": 0,
         }
-        if head <= start:
-            return report
-        candidates = []
-        scanned_to = head
-        quote = self.registry.quote_address
-        if self.s.discover_v3:
-            logs, scanned_to = self.client.logs(
-                {"fromBlock": start + 1, "toBlock": head, "address": self.factory, "topics": [self.topic]},
-                chunk=self.CHUNK,
-                max_blocks=self.MAX_BLOCKS_PER_SCAN,
-            )
-            for log in logs:
-                try:
-                    created = decode_pool_created(log)
-                except (ValueError, KeyError):
-                    continue
-                if created["fee"] not in POOL_FEE_TIERS:
-                    continue
-                if quote not in (created["token0"], created["token1"]):
-                    continue
-                other = created["token1"] if created["token0"] == quote else created["token0"]
-                if other in (quote, self.registry.weth):
-                    continue
-                candidates.append({**created, "token": other, "venue": "v3"})
-        if self.s.discover_v4 and self.venue is not None:
-            logs, v4_to = self.client.logs(
-                {
-                    "fromBlock": start + 1,
-                    "toBlock": head,
-                    "address": self.venue.pool_manager,
-                    "topics": [self.v4_topic],
-                },
-                chunk=self.CHUNK,
-                max_blocks=self.MAX_BLOCKS_PER_SCAN,
-            )
-            scanned_to = min(scanned_to, v4_to)
-            # Pools that only become reachable once a bridge exists wait here.
-            unrouted = list(self.l.get("unrouted_v4") or [])
-            for log in logs:
-                try:
-                    created = v4mod.decode_initialize(log)
-                except (ValueError, KeyError):
-                    continue
-                unrouted.append(created)
-            # Learn every bridge in the batch first, so a pool that arrived
-            # before its bridge did is routed in the same scan.
-            for created in unrouted[-400:]:
-                if quote in (created["currency0"], created["currency1"]):
-                    other = created["currency1"] if created["currency0"] == quote else created["currency0"]
-                    if other != quote:
-                        self._learn_bridge(created, other)
-            still = []
-            for created in unrouted[-400:]:
-                c = self._route_v4(created, quote)
-                if c is None:
-                    still.append(created)
-                elif c:
-                    candidates.append(c)
-            self.l.put("unrouted_v4", still[-200:])
-        report["to_block"] = scanned_to
-        report["backlog_blocks"] = head - scanned_to
-        self.l.put("discovery_backlog", head - scanned_to)
-        # Newest first; a pool the run already knows about is not a candidate.
-        candidates.sort(key=lambda c: -c["block"])
-        seen = set()
-        unique = []
-        for c in candidates:
-            if c["token"] in seen:
-                continue
-            seen.add(c["token"])
-            unique.append(c)
-        candidates = unique
-        universe = self.l.universe()
-        known = {e.get("address") for e in universe.values()} | set(self.l.seen_candidates())
-        fresh = [c for c in candidates if c["token"] not in known]
-        report["candidates"] = len(fresh)
-        report["skipped"] = len(candidates) - len(fresh)
-        room = max(0, int(self.s.max_products) - len(universe))
-        coin = checksum(self.s.coin_address) if self.s.coin_address else None
-        # The operator's own coin is looked at first and is not subject to the cap.
-        fresh.sort(key=lambda c: 0 if c["token"] == coin else 1)
-        for c in fresh[: int(self.s.discovery_batch)]:
-            if room <= 0 and c["token"] != coin:
-                report["rejected"].append({"address": c["token"], "reason": "universe full"})
-                self.l.mark_candidate(c["token"], "universe full", now)
-                continue
-            outcome = self._consider(c, now, eth_usd)
-            if outcome["added"]:
-                if c["token"] != coin:
-                    room -= 1
-                report["added"].append(outcome)
-            else:
-                report["rejected"].append(outcome)
-        self.l.put("discovery_block", scanned_to)
+        if head > start:
+            scanned_to = self._fetch(start, head, report)
+            report["to_block"] = scanned_to
+            report["backlog_blocks"] = head - scanned_to
+        else:
+            report["backlog_blocks"] = 0
+        self._screen_pending(now, eth_usd, report)
+        report["pending"] = len(self.l.get("pending_candidates") or [])
         self.l.record_discovery(report)
         return report
 
+    def _fetch(self, start, head, report):
+        quote = self.registry.quote_address
+        limit = min(head, start + self.MAX_BLOCKS_PER_SCAN)
+        scanned_to = start
+        while scanned_to < limit:
+            lo = scanned_to + 1
+            hi = min(limit, scanned_to + self.WINDOW)
+            candidates = []
+            if self.s.discover_v3:
+                logs, hi3 = self.client.logs(
+                    {"fromBlock": lo, "toBlock": hi, "address": self.factory, "topics": [self.topic]},
+                    chunk=self.CHUNK,
+                )
+                hi = min(hi, hi3)
+                for log in logs:
+                    try:
+                        created = decode_pool_created(log)
+                    except (ValueError, KeyError):
+                        continue
+                    if created["fee"] not in POOL_FEE_TIERS:
+                        continue
+                    if quote not in (created["token0"], created["token1"]):
+                        continue
+                    other = created["token1"] if created["token0"] == quote else created["token0"]
+                    if other in (quote, self.registry.weth):
+                        continue
+                    candidates.append({**created, "token": other, "venue": "v3"})
+            if self.s.discover_v4 and self.venue is not None:
+                logs, hi4 = self.client.logs(
+                    {
+                        "fromBlock": lo,
+                        "toBlock": hi,
+                        "address": self.venue.pool_manager,
+                        "topics": [self.v4_topic],
+                    },
+                    chunk=self.CHUNK,
+                )
+                hi = min(hi, hi4)
+                # Pools that only become reachable once a bridge exists wait here.
+                unrouted = list(self.l.get("unrouted_v4") or [])
+                for log in logs:
+                    try:
+                        created = v4mod.decode_initialize(log)
+                    except (ValueError, KeyError):
+                        continue
+                    unrouted.append(created)
+                # Learn every bridge in the batch first, so a pool that arrived
+                # before its bridge did is routed in the same scan.
+                for created in unrouted[-400:]:
+                    if quote in (created["currency0"], created["currency1"]):
+                        other = created["currency1"] if created["currency0"] == quote else created["currency0"]
+                        if other != quote:
+                            self._learn_bridge(created, other)
+                still = []
+                for created in unrouted[-400:]:
+                    c = self._route_v4(created, quote)
+                    if c is None:
+                        still.append(created)
+                    elif c:
+                        candidates.append(c)
+                self.l.put("unrouted_v4", still[-200:])
+            self._enqueue(candidates, report)
+            scanned_to = hi
+            with self.l.transaction():
+                self.l.put("discovery_block", scanned_to)
+                self.l.put("discovery_backlog", head - scanned_to)
+        return scanned_to
+
+    def _enqueue(self, candidates, report):
+        """Queue the pools this window found that the run has not seen before."""
+        pending = list(self.l.get("pending_candidates") or [])
+        universe = self.l.universe()
+        known = (
+            {e.get("address") for e in universe.values()}
+            | set(self.l.seen_candidates())
+            | {c["token"] for c in pending}
+        )
+        # Newest first; the same token launching twice is one candidate.
+        candidates.sort(key=lambda c: -c["block"])
+        for c in candidates:
+            if c["token"] in known:
+                report["skipped"] += 1
+                continue
+            known.add(c["token"])
+            pending.append(c)
+            report["candidates"] += 1
+        self.l.put("pending_candidates", pending[-500:])
+
+    def _screen_pending(self, now, eth_usd, report):
+        pending = list(self.l.get("pending_candidates") or [])
+        if not pending:
+            return
+        universe = self.l.universe()
+        room = max(0, int(self.s.max_products) - len(universe))
+        coin = checksum(self.s.coin_address) if self.s.coin_address else None
+        # The operator's own coin is looked at first and is not subject to the
+        # cap; otherwise the newest launch first.
+        pending.sort(key=lambda c: (0 if c["token"] == coin else 1, -c["block"]))
+        batch, rest = pending[: int(self.s.discovery_batch)], pending[int(self.s.discovery_batch):]
+        for i, c in enumerate(batch):
+            if room <= 0 and c["token"] != coin:
+                report["rejected"].append({"address": c["token"], "reason": "universe full"})
+                self.l.mark_candidate(c["token"], "universe full", now)
+            else:
+                # A network error here propagates; this candidate and the ones
+                # after it stay queued for the next scan.
+                outcome = self._consider(c, now, eth_usd)
+                if outcome["added"]:
+                    if c["token"] != coin:
+                        room -= 1
+                    report["added"].append(outcome)
+                else:
+                    report["rejected"].append(outcome)
+            self.l.put("pending_candidates", batch[i + 1:] + rest)
+
     def due(self, now):
-        # With a backlog still to cover, scan again soon rather than in ten minutes.
-        behind = self.l.get("discovery_backlog") or 0
+        # With a backlog still to cover, or candidates still queued, scan again
+        # soon rather than in ten minutes.
+        behind = (self.l.get("discovery_backlog") or 0) or self.l.get("pending_candidates")
         interval = 60 if behind else self.s.discovery_interval_seconds
         return now - self.last_scan >= interval
 

@@ -139,6 +139,48 @@ class Donations:
             self.l.record_event("donations", {"at": now, "deposits": booked})
         return booked
 
+    def credit_transfer(self, tx_hash, now, equity):
+        """Book a transfer that predates the run as a donation from its sender.
+
+        The money is already counted as the operator's capital, so it is
+        reassigned inside the pool rather than deposited into the ledger.
+        """
+        receipt = self.client.w3.eth.get_transaction_receipt(tx_hash)
+        if receipt is None or int(receipt.get("status", 1)) != 1:
+            raise RuntimeError("That transaction did not succeed")
+        quote = checksum(self.registry.quote_address)
+        booked = []
+        for log in receipt["logs"]:
+            if checksum(log["address"]) != quote or len(log["topics"]) != 3:
+                continue
+            if hex_of(log["topics"][0]).lower() != self.topic.lower():
+                continue
+            if topic_address(log["topics"][2]) != self.wallet:
+                continue
+            sender = topic_address(log["topics"][1])
+            if sender == self.wallet:
+                continue
+            amount = from_wei(data_int(log["data"]), self.qd)
+            if amount <= 0:
+                continue
+            h = hex_of(receipt["transactionHash"]).lower()
+            entry = self.pool.reassign(
+                sender, amount, equity, now, h, int(log.get("logIndex", 0)), int(receipt["blockNumber"])
+            )
+            if entry is not None:
+                booked.append({
+                    "address": sender,
+                    "amount": str(amount),
+                    "nav": str(entry["nav"]),
+                    "units": str(entry["units"]),
+                    "tx_hash": h,
+                    "credited_to": sender,
+                    "manual": True,
+                })
+        if booked:
+            self.l.record_event("donations", {"at": now, "deposits": booked, "manual": True})
+        return booked
+
     # -- paying out -----------------------------------------------------------
 
     def due(self, now):

@@ -121,6 +121,19 @@ while an order is in flight is never transient. A run halted by a transient
 error resumes on the next start without review; a dedicated RPC endpoint
 (`STONKFLYRH_RPC_URL`) makes all of this rarer.
 
+Discovery keeps its place: the block reached is written to the ledger after every
+6,000-block window and candidates wait in a queue there until screened, so an error
+mid-scan resumes from the last window and never re-screens a pool it already judged.
+
+## Changing settings on a running ledger
+
+Restarting with a changed `.env` is fine for tuning values: order size, screen
+thresholds, discovery pacing, adaptation. The change is recorded as a `migration`
+event in the ledger and the run carries on. Values that define what the run *is* —
+network, quote asset, donor share — still refuse; those need a separate run directory.
+`python -m stonkflyrh discovery --out runs/live` shows the halt reason and the last
+`error.json` alongside the scan state.
+
 ## Stopping
 
 `touch runs/live/STOP` stops before the next order and is checked again at the final send
@@ -160,7 +173,7 @@ are always allowed) and USDG can reach its token: directly, or through a **bridg
 USDG pool for the pair asset. Bridges come from the registry (`v4.bridges`, e.g. a
 GOOGL/USDG PoolKey) and from hookless standard-fee USDG pools seen on chain. A launch
 paired with an asset that has no bridge yet waits, and is routed the moment one appears.
-Native-ETH pairs are not routed in this version. Trades on v4 go through the Universal
+Native-ETH pairs route through the USDG/ETH pool once it has been seen. Trades on v4 go through the Universal
 Router via Permit2, single-hop or multi-hop in one transaction; the screen infers depth
 from price impact and checks pool age instead of v3's oracle history.
 
