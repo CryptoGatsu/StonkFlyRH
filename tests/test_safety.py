@@ -223,7 +223,7 @@ def test_a_thin_pool_fails_price_impact(tmp_path):
 
 
 def test_shallow_liquidity_is_rejected(tmp_path):
-    _, ledger, screen, _ = build(tmp_path, pool=FakePool(pool_weth=to_wei("1200", QD)))
+    _, ledger, screen, _ = build(tmp_path, pool=FakePool(pool_weth=to_wei("900", QD)))
     try:
         verdict = screen.assess("PONS", POOL, ETH_USD)
         liquidity = next(c for c in verdict.checks if c.name == "liquidity")

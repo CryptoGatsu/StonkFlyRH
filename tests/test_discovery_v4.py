@@ -189,12 +189,25 @@ def test_a_pool_with_no_route_waits_for_a_bridge(tmp_path):
         ledger.close()
 
 
-def test_native_eth_pairs_are_not_routed_yet(tmp_path):
+def test_an_eth_paired_launch_routes_through_the_usdg_eth_pool(tmp_path):
+    logs = [init_log(v4.NATIVE, USDG, 500, 10, NOHOOK, 4800), init_log(v4.NATIVE, COIN, 30000, 60, PONS_HOOK, 4900)]
+    ledger, _, _, disc = build(tmp_path, logs, {COIN: ("ETHY", 18)})
+    try:
+        report = disc.scan(time.time(), ETH_USD)
+        assert [a["symbol"] for a in report["added"]] == ["ETHY"], report
+        entry = ledger.universe()["ETHY"]
+        assert entry["via"] == "ETH" and len(entry["route"]) == 2
+        assert entry["route"][0]["currency0"] == v4.NATIVE
+    finally:
+        ledger.close()
+
+
+def test_an_eth_paired_launch_waits_without_a_usdg_eth_pool(tmp_path):
     logs = [init_log(v4.NATIVE, COIN, 30000, 60, PONS_HOOK, 4900)]
     ledger, _, _, disc = build(tmp_path, logs, {COIN: ("ETHY", 18)})
     try:
         assert disc.scan(time.time(), ETH_USD)["candidates"] == 0
-        assert ledger.get("unrouted_v4") == []
+        assert len(ledger.get("unrouted_v4")) == 1
     finally:
         ledger.close()
 

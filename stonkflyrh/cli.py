@@ -51,6 +51,9 @@ def build_parser():
     fees.add_argument("--minimum", type=str, default=None)
     fees.add_argument("--tokens", type=Path)
 
+    diag = sub.add_parser("discovery", help="What discovery has scanned, found, routed and rejected")
+    diag.add_argument("--out", type=Path, default=Path("runs/live"))
+
     donors = sub.add_parser("donors", help="Show the pool: who holds what and who is owed")
     donors.add_argument("--out", type=Path, default=Path("runs/live"))
 
@@ -380,6 +383,50 @@ def cmd_start(a, parser):
                 "order_limit_usd": r.order_limit_usd,
                 "site": "python -m stonkflyrh serve --out " + str(out)})
     return cmd_run(r, parser)
+
+
+def cmd_discovery(a):
+    import sqlite3
+
+    path = a.out / "ledger.sqlite"
+    if not path.exists():
+        raise SystemExit(f"No ledger at {path}")
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    meta = {k: json.loads(v) for k, v in db.execute("SELECT key,value FROM meta")}
+    scans = [json.loads(r[0]) for r in db.execute("SELECT report FROM discovery ORDER BY id DESC LIMIT 8")]
+    candidates = db.execute("SELECT COUNT(*) FROM candidates").fetchone()[0]
+    outcomes = {}
+    for (o,) in db.execute("SELECT outcome FROM candidates"):
+        key = o.split(" — ")[0][:60]
+        outcomes[key] = outcomes.get(key, 0) + 1
+    screens = {p: json.loads(v) for p, v in db.execute("SELECT product,verdict FROM screens")}
+    db.close()
+    failed = {}
+    for v in screens.values():
+        for c in v.get("checks", []):
+            if not c.get("passed"):
+                failed[c["name"]] = failed.get(c["name"], 0) + 1
+    unrouted = meta.get("unrouted_v4") or []
+    print(json.dumps({
+        "scanned_to_block": meta.get("discovery_block"),
+        "backlog_blocks": meta.get("discovery_backlog"),
+        "universe": list((meta.get("universe") or {}).keys()),
+        "bridges": {k: v.get("symbol") for k, v in (meta.get("bridges") or {}).items()},
+        "candidates_screened": candidates,
+        "candidate_outcomes": dict(sorted(outcomes.items(), key=lambda kv: -kv[1])[:12]),
+        "screen_checks_failed": failed,
+        "unrouted_v4_pools": len(unrouted),
+        "unrouted_examples": [
+            {"currency0": u["currency0"][:10], "currency1": u["currency1"][:10], "hooks": u["hooks"][:10], "fee": u["fee"]}
+            for u in unrouted[-5:]
+        ],
+        "recent_scans": [
+            {k: v for k, v in sc.items() if k in ("from_block", "to_block", "candidates", "skipped", "backlog_blocks")}
+            | {"added": len(sc.get("added", [])), "rejected": len(sc.get("rejected", []))}
+            for sc in scans
+        ],
+        "last_rejections": [r.get("reason", "")[:140] for sc in scans[:2] for r in sc.get("rejected", [])[:6]],
+    }, indent=2))
 
 
 def cmd_donors(a):

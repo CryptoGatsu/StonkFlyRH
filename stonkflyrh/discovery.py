@@ -130,14 +130,16 @@ class PoolDiscovery:
         return self.l.get("bridges") or {}
 
     def _learn_bridge(self, created, other):
-        """A hookless USDG pool at a standard tier is a route others can use."""
+        """A hookless USDG pool at a standard tier is a route others can use.
+        That includes USDG/ETH: native ETH is a currency v4 can route through."""
         if created["hooks"] != v4mod.NATIVE or created["fee"] > BRIDGE_MAX_FEE:
             return
         bridges = self.bridges()
         if other in bridges:
             return
         key = v4mod.pool_key(created["currency0"], created["currency1"], created["fee"], created["tickSpacing"], created["hooks"])
-        bridges[other] = {"symbol": other[:8], "route": [key], "source": "observed", "block": created["block"]}
+        symbol = "ETH" if other == v4mod.NATIVE else other[:8]
+        bridges[other] = {"symbol": symbol, "route": [key], "source": "observed", "block": created["block"]}
         self.l.put("bridges", bridges)
 
     def _hook_allowed(self, hooks):
@@ -271,8 +273,6 @@ class PoolDiscovery:
         to drop it for good.
         """
         c0, c1 = created["currency0"], created["currency1"]
-        if v4mod.NATIVE in (c0, c1):
-            return False  # native-ETH pairs are not routed in this version
         fee = created["fee"]
         if fee != V4_DYNAMIC_FEE and fee > V4_MAX_FEE:
             return False
