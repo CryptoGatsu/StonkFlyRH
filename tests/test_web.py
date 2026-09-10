@@ -13,27 +13,35 @@ from stonkflyrh.config import Settings
 from stonkflyrh.ledger import Ledger
 from stonkflyrh.risk import Guard
 from stonkflyrh.web import server as web
-from tests.test_execution import quote
+from tests.test_execution import CAPITAL, ETH_USD, quote
 
 
 def write_run(tmp_path, ticks=3):
-    settings = Settings()
-    ledger = Ledger(tmp_path / "ledger.sqlite", settings, "paper")
+    settings = Settings(protocol_fee_bps=100)
+    ledger = Ledger(tmp_path / "ledger.sqlite", settings, "paper", CAPITAL)
     guard = Guard(settings, ledger, tmp_path / "STOP")
-    broker = PaperBroker(settings, ledger, {"trading": "0xaaa", "fee": "0xbbb"})
+    broker = PaperBroker(settings, ledger, {"trading": "0xaaa"})
     rows = []
     for tick in range(1, ticks + 1):
         ledger.put("last_attempt", 0)
-        plan = ledger.reserve(guard.plan("DOGE", "BUY", {"DOGE": quote()}), time.time())
+        plan = ledger.reserve(
+            guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD), time.time()
+        )
         execution = broker.execute(plan, guard.before_submit)
         rows.append(
             {
                 "tick": tick,
                 "wall_time": time.time(),
-                "product": "DOGE",
+                "product": "PONS",
                 "mode": "paper",
                 "quote": quote().json(),
                 "equity_weth": str(ledger.cash),
+                "equity_usd": "100.00",
+                "notional_usd": "10.00",
+                "screen": {"approved": True, "checks": [
+                    {"name": "sellable", "passed": True, "detail": "ok"},
+                    {"name": "liquidity", "passed": True, "detail": "ok"},
+                ]},
                 "neural": {"side": "BUY", "difference_hz": 1.5, "gate_spikes": 4,
                            "stimulus": "reward", "memory": {"changed_edges": 12}},
                 "execution": execution,
@@ -50,8 +58,9 @@ def write_run(tmp_path, ticks=3):
                 "feed": "fixture",
                 "network": {"name": "Robinhood Chain", "chain_id": 4663,
                             "explorer": "https://explorer.example"},
-                "wallets": {"trading": "0xaaa", "fee": "0xbbb",
-                            "development": "0xdev", "dev_share_percent": 20.0},
+                "wallets": {"fly": "0xaaa", "fee": "0xbbb"},
+                "screen": {"enabled": True},
+                "social": {"configured": False, "opted_in": False, "live": False},
             }
         )
     )
@@ -93,9 +102,10 @@ def test_state_reports_mode_fees_and_the_dev_share(site):
     fees = state["meta"]["fees"]
     assert state["meta"]["mode"] == "paper"
     assert fees["fills_charged"] == 3
-    assert fees["dev_share_percent"] == 20.0
-    assert int(fees["dev_wei"]) * 10000 == int(fees["gross_wei"]) * 2000
-    assert state["provenance"]["wallets"]["development"] == "0xdev"
+    assert int(fees["gross_wei"]) > 0
+    assert state["provenance"]["wallets"]["fee"] == "0xbbb"
+    assert state["meta"]["blocklist"] == []
+    assert state["meta"]["rugs"] == []
 
 
 def test_state_omits_the_bulky_observation_blob(site):
@@ -128,7 +138,7 @@ def test_stream_pushes_a_new_trade(site):
     with urllib.request.urlopen(request, timeout=10) as stream:
         with (out / "events.jsonl").open("a") as f:
             f.write(json.dumps({"tick": 99, "wall_time": time.time(),
-                                "product": "DOGE", "neural": {"side": "SELL"},
+                                "product": "PONS", "neural": {"side": "SELL"},
                                 "execution": {"status": "FILLED"}}) + "\n")
         deadline = time.time() + 8
         payload = b""

@@ -12,22 +12,25 @@ from stonkflyrh.config import D, QUOTE_DECIMALS, Settings, from_wei, to_wei
 from stonkflyrh.ledger import Ledger
 from stonkflyrh.market import Quote
 from stonkflyrh.reinforcement import reinforcement
-from stonkflyrh.risk import Guard, Veto
+from stonkflyrh.risk import Guard, Veto, realised_volatility
 
 PRICE = D("0.0000001")
+ETH_USD = D("2500")
+# $100 of capital at $2500/ETH.
+CAPITAL = D("0.04")
 
 
 def quote(**changes):
     q = Quote(
-        "DOGE",
+        "PONS",
         PRICE * D("0.99"),
         PRICE * D("1.01"),
         time.time(),
         18,
         QUOTE_DECIMALS,
         10000,
-        D("0.005"),
-        D("49504"),
+        D("0.004"),
+        D("39604"),
     )
     return dataclasses.replace(q, **changes)
 
@@ -35,17 +38,16 @@ def quote(**changes):
 @pytest.fixture
 def env(tmp_path):
     s = Settings()
-    ledger = Ledger(tmp_path / "ledger.sqlite", s, "paper")
+    ledger = Ledger(tmp_path / "ledger.sqlite", s, "paper", CAPITAL)
     guard = Guard(s, ledger, tmp_path / "STOP")
     yield s, ledger, guard
     ledger.close()
 
 
-def buy(env, quotes=None, now=None):
+def buy(env, quotes=None):
     s, ledger, guard = env
-    quotes = quotes or {"DOGE": quote()}
-    plan = guard.plan("DOGE", "BUY", quotes, now=now)
-    plan = ledger.reserve(plan, now or time.time())
+    quotes = quotes or {"PONS": quote()}
+    plan = ledger.reserve(guard.plan("PONS", "BUY", quotes, ETH_USD), time.time())
     return PaperBroker(s, ledger).execute(plan, guard.before_submit)
 
 
@@ -61,24 +63,36 @@ def test_nonfinite_money(value):
 @pytest.mark.parametrize(
     "changes",
     [
-        dict(capital="1.01"),
-        dict(order_limit="0.2"),
+        dict(capital_usd="1001"),
+        dict(order_limit_usd="101"),
+        dict(order_limit_usd="200", capital_usd="150"),
+        dict(min_order_usd="20"),
+        dict(loss_stop_usd="200"),
         dict(products=("WETH",)),
-        dict(products=("DOGE", "DOGE")),
-        dict(products=("doge",)),
+        dict(products=("PONS", "PONS")),
+        dict(products=("pons",)),
         dict(products=()),
         dict(network="ethereum"),
         dict(protocol_fee_bps=301),
         dict(protocol_fee_bps=1.0),
         dict(pool_fee_tier=1234),
-        dict(slippage="0.06"),
-        dict(min_order_quote="0.9"),
+        dict(slippage="0.2"),
         dict(max_gas_share="0.9"),
         dict(gas_limit=99),
         dict(neural_bin_ms=0.01),
-        dict(reward_deadband="0"),
+        dict(reward_deadband_usd="0"),
         dict(interval_seconds=float("nan")),
         dict(daily_orders=1.5),
+        dict(max_transfer_tax="0.9"),
+        dict(max_price_impact="0"),
+        dict(rug_drawdown="1"),
+        dict(min_pool_observations=-1),
+        dict(calm_volatility="0.5", max_volatility="0.2"),
+        dict(min_size_scale="0"),
+        dict(rug_tightening="0.5"),
+        dict(rug_pulse_multiplier="9"),
+        dict(rug_exit_spread="0.01"),
+        dict(volatility_window=2),
     ],
 )
 def test_configuration_bounds(changes):
@@ -86,11 +100,38 @@ def test_configuration_bounds(changes):
         Settings(**changes)
 
 
-def test_defaults_are_denominated_in_weth():
+def test_defaults_match_the_operators_stated_size():
     s = Settings()
-    assert D(s.order_limit) <= D(s.capital)
-    assert s.protocol_fee_bps == 100
+    assert s.capital_usd == "100"
+    assert s.order_limit_usd == "10"
     assert s.network == "robinhood-mainnet"
+    assert s.screen_enabled and s.adapt_enabled
+
+
+def test_only_robinhood_chain_is_configurable():
+    assert Settings(network="robinhood-testnet").network == "robinhood-testnet"
+    with pytest.raises(ValueError):
+        Settings(network="base-mainnet")
+
+
+# -- dollar limits ---------------------------------------------------------
+
+
+def test_limits_convert_from_dollars_at_the_current_reference(env):
+    _, _, guard = env
+    limits = guard.limits(ETH_USD)
+    assert limits["order_limit"] == D("10") / ETH_USD
+    assert limits["min_order"] == D("1") / ETH_USD
+    # The same dollar limit is fewer WETH when ETH is worth more.
+    assert guard.limits(D("5000"))["order_limit"] < limits["order_limit"]
+
+
+def test_a_ten_dollar_limit_stays_ten_dollars_when_eth_moves(env):
+    s, _, guard = env
+    for price in [D("1500"), D("2500"), D("4000")]:
+        plan = guard.plan("PONS", "BUY", {"PONS": quote()}, price)
+        assert D(plan["notional_usd"]) == pytest.approx(D("10"), rel=D("0.001"))
+        guard.l.put("last_attempt", 0)
 
 
 # -- the guard -------------------------------------------------------------
@@ -100,44 +141,79 @@ def test_stop_file_vetoes(env, tmp_path):
     _, _, guard = env
     (tmp_path / "STOP").write_text("")
     with pytest.raises(Veto, match="STOP"):
-        guard.check({"DOGE": quote()}, time.time())
+        guard.check({"PONS": quote()}, time.time(), ETH_USD)
 
 
 def test_halt_vetoes(env):
     _, ledger, guard = env
     ledger.halt("manual")
     with pytest.raises(Veto, match="manual"):
-        guard.check({"DOGE": quote()}, time.time())
+        guard.check({"PONS": quote()}, time.time(), ETH_USD)
 
 
 def test_stale_and_future_quotes_veto(env):
     _, _, guard = env
     now = time.time()
     with pytest.raises(Veto, match="Stale"):
-        guard.check({"DOGE": quote(timestamp=now - 3600)}, now)
+        guard.check({"PONS": quote(timestamp=now - 3600)}, now, ETH_USD)
     with pytest.raises(Veto, match="Stale"):
-        guard.check({"DOGE": quote(timestamp=now + 60)}, now)
+        guard.check({"PONS": quote(timestamp=now + 60)}, now, ETH_USD)
 
 
-def test_wide_round_trip_vetoes(env):
+def test_wide_round_trip_vetoes_a_buy(env):
     _, _, guard = env
-    wide = quote(bid=PRICE * D("0.5"))
     with pytest.raises(Veto, match="Round-trip"):
-        guard.check({"DOGE": wide}, time.time())
+        guard.plan("PONS", "BUY", {"PONS": quote(bid=PRICE * D("0.5"))}, ETH_USD)
+
+
+def test_one_drained_pool_does_not_freeze_the_other_tokens(tmp_path):
+    s = Settings(products=("PONS", "DEAD"))
+    ledger = Ledger(tmp_path / "two.sqlite", s, "paper", CAPITAL)
+    try:
+        guard = Guard(s, ledger, tmp_path / "STOP")
+        quotes = {"PONS": quote(), "DEAD": quote(product="DEAD", bid=PRICE * D("0.3"))}
+        guard.check(quotes, time.time(), ETH_USD)  # the tick itself is fine
+        assert guard.plan("PONS", "BUY", quotes, ETH_USD)["product"] == "PONS"
+        with pytest.raises(Veto, match="Round-trip"):
+            guard.plan("DEAD", "BUY", quotes, ETH_USD)
+    finally:
+        ledger.close()
+
+
+def test_the_exit_from_a_rug_may_pay_a_wide_spread(env):
+    s, ledger, guard = env
+    ledger.put("positions", {"PONS": "40000"})
+    wide = {"PONS": quote(bid=PRICE * D("0.7"))}
+    with pytest.raises(Veto, match="Round-trip"):
+        guard.plan("PONS", "SELL", wide, ETH_USD)
+    ledger.block("PONS", "bid collapsed", time.time())
+    plan = guard.plan("PONS", "SELL", wide, ETH_USD)
+    assert plan["side"] == "SELL"
+    assert guard.move_tolerance("PONS", "SELL") == D(s.rug_exit_spread)
+    assert guard.move_tolerance("PONS", "BUY") == D(s.slippage)
+
+
+def test_volatility_never_stops_an_exit(env):
+    _, ledger, guard = env
+    ledger.put("positions", {"PONS": "40000"})
+    wild = [1 + 0.9 * (-1) ** i for i in range(40)]
+    with pytest.raises(Veto, match="volatility"):
+        guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD, history=wild)
+    plan = guard.plan("PONS", "SELL", {"PONS": quote()}, ETH_USD, history=wild)
+    assert plan["size_scale"] == "1"
 
 
 def test_incomplete_snapshot_vetoes(env):
     _, _, guard = env
     with pytest.raises(Veto, match="Incomplete"):
-        guard.check({}, time.time())
+        guard.check({}, time.time(), ETH_USD)
 
 
 def test_cooldown_and_daily_limit(env):
     s, ledger, guard = env
-    now = time.time()
-    buy(env, now=now)
+    buy(env)
     with pytest.raises(Veto, match="cooldown"):
-        guard.plan("DOGE", "BUY", {"DOGE": quote()}, now=now + 1)
+        guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD)
     ledger.put("last_attempt", 0)
     for i in range(s.daily_orders):
         ledger.db.execute(
@@ -145,76 +221,147 @@ def test_cooldown_and_daily_limit(env):
             (f"filler-{i}", "SETTLED", time.time(), "{}"),
         )
     with pytest.raises(Veto, match="Daily order limit"):
-        guard.plan("DOGE", "BUY", {"DOGE": quote()})
+        guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD)
 
 
 def test_unknown_product_or_side_vetoes(env):
     _, _, guard = env
     with pytest.raises(Veto, match="Invalid neural proposal"):
-        guard.plan("SHIB", "BUY", {"DOGE": quote()})
+        guard.plan("SHIB", "BUY", {"PONS": quote()}, ETH_USD)
 
 
 def test_gas_share_veto(env):
     _, _, guard = env
-    # A gas price that would eat most of a 0.005 WETH order.
     with pytest.raises(Veto, match="Gas cost"):
-        guard.plan("DOGE", "BUY", {"DOGE": quote()}, gas_price_wei=10**10)
+        guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD, gas_price_wei=10**10)
 
 
 def test_sell_without_position_vetoes(env):
     _, _, guard = env
     with pytest.raises(Veto, match="No position"):
-        guard.plan("DOGE", "SELL", {"DOGE": quote()})
+        guard.plan("PONS", "SELL", {"PONS": quote()}, ETH_USD)
 
 
 def test_loss_stop_halts(env):
     _, ledger, guard = env
-    ledger.put("cash", "0.03")
+    # $25 of a $100 stake, in WETH.
+    ledger.put("cash", str(CAPITAL - D("26") / ETH_USD))
     with pytest.raises(Veto, match="Loss stop"):
-        guard.check({"DOGE": quote()}, time.time())
+        guard.check({"PONS": quote()}, time.time(), ETH_USD)
     assert "Loss stop" in ledger.get("halted")
 
 
 def test_pending_order_blocks_new_plans(env):
-    s, ledger, guard = env
-    plan = guard.plan("DOGE", "BUY", {"DOGE": quote()})
-    ledger.reserve(plan, time.time())
+    _, ledger, guard = env
+    ledger.reserve(guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD), time.time())
     with pytest.raises(Veto, match="unresolved"):
-        guard.check({"DOGE": quote()}, time.time())
+        guard.check({"PONS": quote()}, time.time(), ETH_USD)
+
+
+def test_blocklisted_token_is_refused_without_a_screen(env):
+    _, ledger, guard = env
+    ledger.block("PONS", "rugged earlier", time.time())
+    with pytest.raises(Veto, match="blocklisted"):
+        guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD)
+
+
+# -- adaptation ------------------------------------------------------------
+
+
+def test_volatility_is_none_without_enough_history():
+    assert realised_volatility([1.0, 1.1], 30) is None
+
+
+def test_volatility_rises_with_choppier_history():
+    calm = [1 + 0.001 * i for i in range(40)]
+    choppy = [1 + 0.1 * (-1) ** i for i in range(40)]
+    assert realised_volatility(choppy, 30) > realised_volatility(calm, 30)
+
+
+def test_calm_markets_trade_the_full_size(env):
+    _, _, guard = env
+    scale, _ = guard.size_scale([1 + 0.0001 * i for i in range(40)])
+    assert scale == D(1)
+
+
+def test_choppy_markets_shrink_the_order(env):
+    s, _, guard = env
+    history = [1 + 0.06 * (-1) ** i for i in range(40)]
+    scale, vol = guard.size_scale(history)
+    assert D(s.min_size_scale) <= scale < D(1)
+    assert vol is not None
+
+
+def test_extreme_volatility_stops_trading_entirely(env):
+    _, _, guard = env
+    history = [1 + 0.9 * (-1) ** i for i in range(40)]
+    with pytest.raises(Veto, match="volatility"):
+        guard.size_scale(history)
+
+
+def test_a_shrunken_order_still_carries_the_right_dollar_figure(env):
+    _, _, guard = env
+    history = [1 + 0.06 * (-1) ** i for i in range(40)]
+    plan = guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD, history=history)
+    assert D(plan["size_scale"]) < D(1)
+    assert D(plan["notional_usd"]) < D("10")
+
+
+def test_adaptation_off_keeps_a_constant_size(env, tmp_path):
+    s = Settings(adapt_enabled=False)
+    ledger = Ledger(tmp_path / "flat.sqlite", s, "paper", CAPITAL)
+    try:
+        guard = Guard(s, ledger, tmp_path / "STOP")
+        history = [1 + 0.06 * (-1) ** i for i in range(40)]
+        assert guard.size_scale(history) == (D(1), None)
+    finally:
+        ledger.close()
+
+
+def test_a_losing_streak_lengthens_the_cooldown(env):
+    s, ledger, guard = env
+    assert guard.cooldown_seconds() == D(s.interval_seconds)
+    ledger.put("loss_streak", 3)
+    assert guard.cooldown_seconds() > D(s.interval_seconds)
 
 
 # -- planning --------------------------------------------------------------
 
 
-def test_buy_plan_reserves_the_fee_before_swapping(env):
-    s, _, guard = env
-    plan = guard.plan("DOGE", "BUY", {"DOGE": quote()})
-    notional = int(plan["notional_wei"])
-    fee = int(plan["planned_fee_wei"])
-    assert notional == to_wei(s.order_limit, QUOTE_DECIMALS)
-    assert fee == notional * s.protocol_fee_bps // 10000
-    assert int(plan["amount_in_wei"]) == notional - fee
-    assert plan["fee_basis"] == "input"
+def test_buy_plan_reserves_the_fee_before_swapping(tmp_path):
+    s = Settings(protocol_fee_bps=100)
+    ledger = Ledger(tmp_path / "fee.sqlite", s, "paper", CAPITAL)
+    try:
+        guard = Guard(s, ledger, tmp_path / "STOP")
+        plan = guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD)
+        notional = int(plan["notional_wei"])
+        fee = int(plan["planned_fee_wei"])
+        assert fee == notional * 100 // 10000
+        assert int(plan["amount_in_wei"]) == notional - fee
+        assert plan["fee_basis"] == "input"
+    finally:
+        ledger.close()
 
 
 def test_buy_plan_min_out_honours_slippage(env):
     s, _, guard = env
     q = quote()
-    plan = guard.plan("DOGE", "BUY", {"DOGE": q})
+    plan = guard.plan("PONS", "BUY", {"PONS": q}, ETH_USD)
     expected = from_wei(int(plan["amount_in_wei"]), QUOTE_DECIMALS) / q.ask
     assert int(plan["min_out_wei"]) == to_wei(expected * (1 - D(s.slippage)), 18)
     assert int(plan["min_out_wei"]) < to_wei(expected, 18)
 
 
 def test_plan_below_minimum_notional_vetoes(tmp_path):
-    s = Settings(capital="0.0006", order_limit="0.0006", loss_stop="0.0006",
-                 min_order_quote="0.0005", gas_reserve="0.0002")
-    ledger = Ledger(tmp_path / "l.sqlite", s, "paper")
+    # A stop equal to the stake keeps the loss stop from firing first, so the
+    # minimum-notional rule is the one under test.
+    s = Settings(loss_stop_usd="100")
+    ledger = Ledger(tmp_path / "small.sqlite", s, "paper", CAPITAL)
     try:
         guard = Guard(s, ledger, tmp_path / "STOP")
-        ledger.put("cash", "0.0001")
+        ledger.put("cash", str(D("0.20") / ETH_USD))  # 20 cents left
         with pytest.raises(Veto, match="below the configured minimum"):
-            guard.plan("DOGE", "BUY", {"DOGE": quote()})
+            guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD)
     finally:
         ledger.close()
 
@@ -222,75 +369,46 @@ def test_plan_below_minimum_notional_vetoes(tmp_path):
 # -- paper execution and accounting ---------------------------------------
 
 
-def test_paper_buy_books_cash_position_and_fee(env):
-    s, ledger, _ = env
+def test_paper_buy_books_cash_and_position(env):
+    _, ledger, _ = env
     start = ledger.cash
     result = buy(env)
     assert result["status"] == "FILLED"
-    fee = int(result["fee_wei"])
     spent = int(result["quote_wei"])
-    assert ledger.cash == start - from_wei(spent + fee, QUOTE_DECIMALS)
-    assert ledger.positions["DOGE"] > 0
-    booked = ledger.fees.accrued()
-    assert booked["gross_wei"] == fee
-    assert booked["dev_wei"] == fee * 2 // 10
-    assert booked["dev_wei"] + booked["treasury_wei"] == fee
-
-
-def test_every_fill_books_exactly_twenty_percent_to_development(env):
-    _, ledger, guard = env
-    for _ in range(3):
-        ledger.put("last_attempt", 0)
-        try:
-            buy(env)
-        except Veto:
-            break
-    accrued = ledger.fees.accrued()
-    assert accrued["fills_charged"] >= 1
-    assert accrued["dev_wei"] * 10000 == accrued["gross_wei"] * 2000
+    assert ledger.cash == start - from_wei(spent + int(result["fee_wei"]), QUOTE_DECIMALS)
+    assert ledger.positions["PONS"] > 0
 
 
 def test_round_trip_buy_then_sell(env):
     s, ledger, guard = env
     buy(env)
-    held = ledger.positions["DOGE"]
+    held = ledger.positions["PONS"]
     assert held > 0
-    # Clear the cooldown rather than move the clock: before_submit reads the
-    # real wall clock and would reject a synthetic future quote.
     ledger.put("last_attempt", 0)
-    plan = guard.plan("DOGE", "SELL", {"DOGE": quote()})
-    plan = ledger.reserve(plan, time.time())
+    plan = ledger.reserve(guard.plan("PONS", "SELL", {"PONS": quote()}, ETH_USD), time.time())
     result = PaperBroker(s, ledger).execute(plan, guard.before_submit)
     assert result["status"] == "FILLED"
-    assert ledger.positions["DOGE"] < held
-    # Two fills, both charged.
-    assert ledger.fees.accrued()["fills_charged"] == 2
-    assert ledger.fees.outstanding("development") == ledger.fees.accrued()["dev_wei"]
+    assert ledger.positions["PONS"] < held
 
 
 def test_gas_is_charged_to_equity_but_not_to_cash(env):
-    s, ledger, _ = env
+    _, ledger, _ = env
     before_gas = ledger.gas_spent
     result = buy(env)
     assert int(result["gas_wei"]) > 0
     assert ledger.gas_spent > before_gas
-    assert ledger.equity({"DOGE": quote()}) < D(s.capital)
+    assert ledger.equity({"PONS": quote()}) < CAPITAL
 
 
 def test_settlement_is_idempotent_and_immutable(env):
     s, ledger, guard = env
-    plan = guard.plan("DOGE", "BUY", {"DOGE": quote()})
-    plan = ledger.reserve(plan, time.time())
+    plan = ledger.reserve(guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD), time.time())
     cid = plan["client_order_id"]
-    broker = PaperBroker(s, ledger)
-    first = broker.execute(plan, guard.before_submit)
+    first = PaperBroker(s, ledger).execute(plan, guard.before_submit)
     cash = ledger.cash
     ledger.settle(
-        cid,
-        int(first["base_wei"]),
-        int(first["quote_wei"]),
-        int(first["fee_wei"]),
-        int(first["gas_wei"]),
+        cid, int(first["base_wei"]), int(first["quote_wei"]),
+        int(first["fee_wei"]), int(first["gas_wei"]),
     )
     assert ledger.cash == cash
     with pytest.raises(RuntimeError, match="changed after finalization"):
@@ -298,48 +416,28 @@ def test_settlement_is_idempotent_and_immutable(env):
 
 
 def test_settlement_refuses_a_fill_beyond_the_reserved_input(env):
-    s, ledger, guard = env
-    plan = guard.plan("DOGE", "BUY", {"DOGE": quote()})
-    plan = ledger.reserve(plan, time.time())
+    _, ledger, guard = env
+    plan = ledger.reserve(guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD), time.time())
     with pytest.raises(RuntimeError, match="spent more than the reserved input"):
         ledger.settle(
-            plan["client_order_id"],
-            int(plan["min_out_wei"]),
-            int(plan["amount_in_wei"]) + 1,
-            int(plan["planned_fee_wei"]),
+            plan["client_order_id"], int(plan["min_out_wei"]),
+            int(plan["amount_in_wei"]) + 1, int(plan["planned_fee_wei"]),
         )
 
 
 def test_settlement_refuses_a_fill_below_the_slippage_bound(env):
-    s, ledger, guard = env
-    plan = guard.plan("DOGE", "BUY", {"DOGE": quote()})
-    plan = ledger.reserve(plan, time.time())
+    _, ledger, guard = env
+    plan = ledger.reserve(guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD), time.time())
     with pytest.raises(RuntimeError, match="below the slippage bound"):
         ledger.settle(
-            plan["client_order_id"],
-            int(plan["min_out_wei"]) - 1,
-            int(plan["amount_in_wei"]),
-            int(plan["planned_fee_wei"]),
-        )
-
-
-def test_settlement_refuses_a_fee_that_does_not_match_the_accrual(env):
-    s, ledger, guard = env
-    plan = guard.plan("DOGE", "BUY", {"DOGE": quote()})
-    plan = ledger.reserve(plan, time.time())
-    with pytest.raises(RuntimeError, match="fee differs from the reserved fee"):
-        ledger.settle(
-            plan["client_order_id"],
-            int(plan["min_out_wei"]),
-            int(plan["amount_in_wei"]),
-            int(plan["planned_fee_wei"]) + 1,
+            plan["client_order_id"], int(plan["min_out_wei"]) - 1,
+            int(plan["amount_in_wei"]), int(plan["planned_fee_wei"]),
         )
 
 
 def test_rejected_intent_cannot_settle(env):
-    s, ledger, guard = env
-    plan = guard.plan("DOGE", "BUY", {"DOGE": quote()})
-    plan = ledger.reserve(plan, time.time())
+    _, ledger, guard = env
+    plan = ledger.reserve(guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD), time.time())
     ledger.mark(plan["client_order_id"], "REJECTED")
     with pytest.raises(RuntimeError, match="rejected intent"):
         ledger.settle(plan["client_order_id"], 1, 1, 0)
@@ -347,8 +445,7 @@ def test_rejected_intent_cannot_settle(env):
 
 def test_before_submit_rejection_marks_the_intent(env):
     s, ledger, guard = env
-    plan = guard.plan("DOGE", "BUY", {"DOGE": quote()})
-    plan = ledger.reserve(plan, time.time())
+    plan = ledger.reserve(guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD), time.time())
     guard.stop_file.write_text("")
     with pytest.raises(Veto):
         PaperBroker(s, ledger).execute(plan, guard.before_submit)
@@ -357,28 +454,30 @@ def test_before_submit_rejection_marks_the_intent(env):
 
 def test_reconcile_settles_an_interrupted_paper_fill(env):
     s, ledger, guard = env
-    plan = guard.plan("DOGE", "BUY", {"DOGE": quote()})
-    plan = ledger.reserve(plan, time.time())
+    ledger.reserve(guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD), time.time())
     assert ledger.pending()
     PaperBroker(s, ledger).reconcile()
     assert not ledger.pending()
-    assert ledger.fees.accrued()["fills_charged"] == 1
 
 
 def test_settings_mismatch_refuses_to_reopen_a_ledger(tmp_path):
-    a = Settings()
-    ledger = Ledger(tmp_path / "l.sqlite", a, "paper")
+    ledger = Ledger(tmp_path / "l.sqlite", Settings(), "paper", CAPITAL)
     ledger.close()
     with pytest.raises(RuntimeError, match="mismatch"):
-        Ledger(tmp_path / "l.sqlite", Settings(order_limit="0.004"), "paper")
+        Ledger(tmp_path / "l.sqlite", Settings(order_limit_usd="5"), "paper")
 
 
 def test_mode_mismatch_refuses_to_reopen_a_ledger(tmp_path):
     s = Settings()
-    ledger = Ledger(tmp_path / "l.sqlite", s, "paper")
+    ledger = Ledger(tmp_path / "l.sqlite", s, "paper", CAPITAL)
     ledger.close()
     with pytest.raises(RuntimeError, match="mismatch"):
         Ledger(tmp_path / "l.sqlite", s, "live")
+
+
+def test_a_new_ledger_needs_its_starting_balance(tmp_path):
+    with pytest.raises(ValueError, match="starting WETH balance"):
+        Ledger(tmp_path / "l.sqlite", Settings(), "paper")
 
 
 # -- the action boundary ---------------------------------------------------
@@ -387,9 +486,9 @@ def test_mode_mismatch_refuses_to_reopen_a_ledger(tmp_path):
 @pytest.mark.parametrize(
     "args",
     [
-        {"product": "DOGE", "side": "HOLD"},
-        {"product": "DOGE"},
-        {"product": "DOGE", "side": "BUY", "amount": "1"},
+        {"product": "PONS", "side": "HOLD"},
+        {"product": "PONS"},
+        {"product": "PONS", "side": "BUY", "amount": "1"},
     ],
 )
 def test_proposal_schema_rejects_anything_but_a_side(args):
@@ -399,8 +498,7 @@ def test_proposal_schema_rejects_anything_but_a_side(args):
 
 def test_provider_exposes_exactly_one_action(env):
     s, ledger, guard = env
-    provider = StonkflyRHActions(guard, PaperBroker(s, ledger), "robinhood-mainnet")
-    actions = provider.get_actions()
+    actions = StonkflyRHActions(guard, PaperBroker(s, ledger), "robinhood-mainnet").get_actions()
     assert len(actions) == 1
     assert actions[0].name == "stonkflyrh_swap"
 
@@ -418,13 +516,21 @@ def test_provider_only_supports_its_own_network(env):
     assert not provider.supports_network(Net())
 
 
-def test_provider_invoke_runs_the_guard_and_books_a_fee(env):
+def test_provider_refuses_to_act_without_a_price_reference(env):
     s, ledger, guard = env
     provider = StonkflyRHActions(guard, PaperBroker(s, ledger), "robinhood-mainnet")
-    provider.quotes = {"DOGE": quote()}
-    result = provider.get_actions()[0].invoke({"product": "DOGE", "side": "BUY"})
+    provider.quotes = {"PONS": quote()}
+    with pytest.raises(RuntimeError, match="ETH/USD reference"):
+        provider.get_actions()[0].invoke({"product": "PONS", "side": "BUY"})
+
+
+def test_provider_invoke_runs_the_guard(env):
+    s, ledger, guard = env
+    provider = StonkflyRHActions(guard, PaperBroker(s, ledger), "robinhood-mainnet")
+    provider.quotes = {"PONS": quote()}
+    provider.eth_usd = ETH_USD
+    result = provider.get_actions()[0].invoke({"product": "PONS", "side": "BUY"})
     assert result["status"] == "FILLED"
-    assert ledger.fees.accrued()["dev_wei"] > 0
 
 
 # -- reinforcement ---------------------------------------------------------
@@ -432,11 +538,7 @@ def test_provider_invoke_runs_the_guard_and_books_a_fee(env):
 
 @pytest.mark.parametrize(
     "equity,anchor,expected",
-    [
-        ("0.05", "0.04", "reward"),
-        ("0.04", "0.05", "aversive"),
-        ("0.05", "0.05", "none"),
-    ],
+    [("0.05", "0.04", "reward"), ("0.04", "0.05", "aversive"), ("0.05", "0.05", "none")],
 )
 def test_reinforcement_signs(equity, anchor, expected):
     kind, _ = reinforcement(equity, anchor, "0.00002")

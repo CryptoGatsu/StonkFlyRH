@@ -17,7 +17,7 @@ from .fees import FeeBook
 
 
 class Ledger:
-    def __init__(self, path, settings, mode):
+    def __init__(self, path, settings, mode, capital_weth=None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path, isolation_level=None)
@@ -30,8 +30,22 @@ class Ledger:
             "CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY,status TEXT NOT NULL,"
             "created REAL NOT NULL,plan TEXT NOT NULL,exchange_id TEXT,settlement TEXT)"
         )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS screens (product TEXT PRIMARY KEY,"
+            "checked REAL NOT NULL,verdict TEXT NOT NULL)"
+        )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS rugs (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "product TEXT NOT NULL,at REAL NOT NULL,record TEXT NOT NULL)"
+        )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS blocklist (product TEXT PRIMARY KEY,"
+            "at REAL NOT NULL,reason TEXT NOT NULL)"
+        )
         self.fees = FeeBook(self)
         if self.get("settings") is None:
+            if capital_weth is None:
+                raise ValueError("A new ledger needs its starting WETH balance")
             with self.transaction():
                 for k, v in {
                     "settings": settings.signature(),
@@ -40,11 +54,12 @@ class Ledger:
                     "settings_full": dataclasses.asdict(settings),
                     "mode": mode,
                     "network": settings.network,
-                    "cash": settings.capital,
-                    "initial_cash": settings.capital,
+                    "cash": str(capital_weth),
+                    "initial_cash": str(capital_weth),
                     "positions": {},
+                    "entries": {},
                     "gas_spent": "0",
-                    "anchor": settings.capital,
+                    "anchor": str(capital_weth),
                     "tick": 0,
                     "checkpoint": None,
                     "halted": None,
@@ -222,6 +237,76 @@ class Ledger:
             booked = self.fees.accrue(cid, basis, p["fee_bps"], now)
             if booked["gross_wei"] != fee_wei:
                 raise RuntimeError("Charged fee does not match the booked accrual")
+            if p["side"] == "SELL" and positions[p["product"]] == 0:
+                # Position closed; the rug reference for it is no longer live.
+                entries = dict(self.get("entries") or {})
+                entries.pop(p["product"], None)
+                self.put("entries", entries)
+
+    # -- rug memory ----------------------------------------------------------
+
+    def screen_put(self, product, verdict, now):
+        self.db.execute(
+            "INSERT OR REPLACE INTO screens VALUES (?,?,?)",
+            (product, now, json.dumps(verdict, allow_nan=False)),
+        )
+
+    def screen_raw(self, product):
+        row = self.db.execute(
+            "SELECT verdict FROM screens WHERE product=?", (product,)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def screen_get(self, product, now, ttl):
+        row = self.db.execute(
+            "SELECT checked,verdict FROM screens WHERE product=?", (product,)
+        ).fetchone()
+        if not row or now - row[0] > ttl:
+            return None
+        return json.loads(row[1])
+
+    def record_rug(self, record):
+        """A rug is permanent: the token is blocked for the life of the run."""
+        with self.transaction():
+            self.db.execute(
+                "INSERT INTO rugs(product,at,record) VALUES (?,?,?)",
+                (record["product"], record["at"], json.dumps(record, allow_nan=False)),
+            )
+            self.db.execute(
+                "INSERT OR REPLACE INTO blocklist VALUES (?,?,?)",
+                (record["product"], record["at"], record["reason"]),
+            )
+
+    def rugs(self):
+        rows = self.db.execute(
+            "SELECT record FROM rugs ORDER BY id"
+        ).fetchall()
+        return [json.loads(r[0]) for r in rows]
+
+    def block(self, product, reason, now):
+        self.db.execute(
+            "INSERT OR REPLACE INTO blocklist VALUES (?,?,?)", (product, now, reason)
+        )
+
+    def is_blocked(self, product):
+        return (
+            self.db.execute(
+                "SELECT 1 FROM blocklist WHERE product=?", (product,)
+            ).fetchone()
+            is not None
+        )
+
+    def block_reason(self, product):
+        row = self.db.execute(
+            "SELECT reason FROM blocklist WHERE product=?", (product,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def blocklist(self):
+        rows = self.db.execute(
+            "SELECT product,at,reason FROM blocklist ORDER BY at"
+        ).fetchall()
+        return [{"product": r[0], "at": r[1], "reason": r[2]} for r in rows]
 
     def charge_gas(self, gas_wei):
         """Book gas spent outside a settlement, such as an ERC-20 approval."""

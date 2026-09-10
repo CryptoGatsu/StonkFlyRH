@@ -55,14 +55,23 @@ class FlyController:
             self.brain.ids, annotations(self.brain.ids), settings.decoder_threshold_hz
         )
 
-    def observe(self, rgb, reinforcement):
+    def observe(self, rgb, reinforcement, pulse_ms=None):
+        """`pulse_ms` overrides the stimulus duration for this observation only.
+
+        The run uses it to deliver a longer aversive pulse when a held token
+        rugs than when it merely loses. Both are engineered currents into the
+        same identified cells; the longer one is not a different signal.
+        """
         if reinforcement not in ("none", "reward", "aversive"):
             raise ValueError("Unknown reinforcement")
+        pulse_ms = self.s.pulse_ms if pulse_ms is None else float(pulse_ms)
+        if not 0 < pulse_ms <= self.s.neural_ms:
+            raise ValueError("Stimulus must fit inside the decision window")
         b = self.brain
         counts = np.zeros(b.n, dtype=np.int32)
         wall = 0.0
         remaining = round(self.s.neural_ms / b.dt)
-        pulse = round(self.s.pulse_ms / b.dt) if reinforcement != "none" else 0
+        pulse = round(pulse_ms / b.dt) if reinforcement != "none" else 0
         delivered = 0
         while remaining:
             n = min(remaining, round(self.s.neural_bin_ms / b.dt))

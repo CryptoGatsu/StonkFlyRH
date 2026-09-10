@@ -7,8 +7,9 @@ from stonkflyrh.config import D, QUOTE_DECIMALS, Settings, to_wei
 from stonkflyrh.display import market_frame, tick_label
 from stonkflyrh.market import FixtureMarket, Quote, RobinhoodChainMarket, tick_to_price
 
+PROBE = D("0.004")
 WETH = "0x" + "11" * 20
-DOGE = "0x" + "22" * 20
+TOKEN = "0x" + "22" * 20
 POOL = "0x" + "33" * 20
 
 
@@ -46,7 +47,7 @@ class FakeChain:
 
     net = type("Net", (), {"name": "Robinhood Chain", "chain_id": 4663})()
 
-    def __init__(self, rate=D("10000000"), pool_fee=D("0.01"), token0=DOGE, observations=None):
+    def __init__(self, rate=D("10000000"), pool_fee=D("0.01"), token0=TOKEN, observations=None):
         self.rate = rate
         self.pool_fee = pool_fee
         self.token0 = token0
@@ -77,7 +78,7 @@ class FakeRegistry:
     router = "0x" + "55" * 20
 
     def token(self, symbol):
-        return {"symbol": symbol, "address": DOGE, "decimals": 18}
+        return {"symbol": symbol, "address": TOKEN, "decimals": 18}
 
     def pool_fee(self, symbol, default):
         return default
@@ -94,18 +95,18 @@ def build(chain=None, settings=None):
 
 def test_quote_rejects_a_crossed_book():
     with pytest.raises(ValueError):
-        Quote("DOGE", D("2"), D("1"), 0.0, 18, QUOTE_DECIMALS, 10000, D("1"), D("1"))
+        Quote("PONS", D("2"), D("1"), 0.0, 18, QUOTE_DECIMALS, 10000, D("1"), D("1"))
 
 
 @pytest.mark.parametrize("bad", [D("0"), D("-1")])
 def test_quote_rejects_nonpositive_prices(bad):
     with pytest.raises(ValueError):
-        Quote("DOGE", bad, D("1"), 0.0, 18, QUOTE_DECIMALS, 10000, D("1"), D("1"))
+        Quote("PONS", bad, D("1"), 0.0, 18, QUOTE_DECIMALS, 10000, D("1"), D("1"))
 
 
 def test_quote_rejects_a_non_weth_quote_asset():
     with pytest.raises(ValueError):
-        Quote("DOGE", D("1"), D("1"), 0.0, 18, 6, 10000, D("1"), D("1"))
+        Quote("PONS", D("1"), D("1"), 0.0, 18, 6, 10000, D("1"), D("1"))
 
 
 # -- on-chain quoting ------------------------------------------------------
@@ -113,17 +114,16 @@ def test_quote_rejects_a_non_weth_quote_asset():
 
 def test_bid_and_ask_come_from_both_legs_at_the_order_size():
     market = build()
-    q = market.snapshot()["DOGE"]
+    q = market.snapshot(PROBE)["PONS"]
     assert q.bid < q.ask
     # A 1% pool taken twice: the round trip is about two pool fees wide.
     assert D("0.019") < q.round_trip < D("0.021")
-    assert q.probe_quote == D(Settings().order_limit)
+    assert q.probe_quote == PROBE
 
 
-def test_probe_size_tracks_the_configured_order_limit():
-    settings = Settings(order_limit="0.002")
-    market = build(settings=settings)
-    q = market.snapshot()["DOGE"]
+def test_probe_size_is_the_one_the_caller_asked_for():
+    market = build()
+    q = market.snapshot(D("0.002"))["PONS"]
     assert q.probe_quote == D("0.002")
     assert q.pool_fee == 10000
 
@@ -134,31 +134,31 @@ def test_an_empty_pool_is_an_error_not_a_zero_price():
             return [0, 0, 0, 0]
 
     with pytest.raises(RuntimeError, match="no output"):
-        build(Empty()).snapshot()
+        build(Empty()).snapshot(PROBE)
 
 
 def test_history_seeds_flat_when_the_oracle_has_no_observations():
     market = build()
-    q = market.snapshot()["DOGE"]
-    assert market.seeded["DOGE"] == "flat-from-first-observation"
-    assert len(market.history["DOGE"]) == RobinhoodChainMarket.HISTORY
-    assert market.history["DOGE"][0] == pytest.approx(float(q.mid))
+    q = market.snapshot(PROBE)["PONS"]
+    assert market.seeded["PONS"] == "flat-from-first-observation"
+    assert len(market.history["PONS"]) == RobinhoodChainMarket.HISTORY
+    assert market.history["PONS"][0] == pytest.approx(float(q.mid))
 
 
 def test_history_seeds_from_the_pool_oracle_when_available():
     # A cumulative tick series with a constant 60-second slope of tick 0.
     observations = [0] * (RobinhoodChainMarket.HISTORY + 1)
     market = build(FakeChain(observations=observations))
-    market.snapshot()
-    assert market.seeded["DOGE"] == "pool-twap"
-    assert len(market.history["DOGE"]) == RobinhoodChainMarket.HISTORY
+    market.snapshot(PROBE)
+    assert market.seeded["PONS"] == "pool-twap"
+    assert len(market.history["PONS"]) == RobinhoodChainMarket.HISTORY
 
 
 def test_record_keeps_a_bounded_history():
     market = build()
     for _ in range(5):
-        market.record(market.snapshot())
-    assert len(market.history["DOGE"]) == RobinhoodChainMarket.HISTORY
+        market.record(market.snapshot(PROBE))
+    assert len(market.history["PONS"]) == RobinhoodChainMarket.HISTORY
     assert market.report()["feed"] == "robinhood-chain-quoter"
 
 
@@ -180,9 +180,9 @@ def test_tick_to_price_scales_with_decimals():
 
 
 def test_fixture_market_is_offline_and_ordered():
-    market = FixtureMarket(Settings(products=("DOGE", "SHIB")))
-    quotes = market.snapshot()
-    assert set(quotes) == {"DOGE", "SHIB"}
+    market = FixtureMarket(Settings(products=("PONS", "SHIB")))
+    quotes = market.snapshot(PROBE)
+    assert set(quotes) == {"PONS", "SHIB"}
     for q in quotes.values():
         assert 0 < q.bid < q.ask
     assert market.report()["feed"] == "fixture"
@@ -190,22 +190,27 @@ def test_fixture_market_is_offline_and_ordered():
 
 def test_fixture_prices_move_between_ticks():
     market = FixtureMarket(Settings())
-    first = market.snapshot()["DOGE"].mid
-    second = market.snapshot()["DOGE"].mid
+    first = market.snapshot(PROBE)["PONS"].mid
+    second = market.snapshot(PROBE)["PONS"].mid
     assert first != second
+
+
+def test_fixture_market_refuses_to_price_on_chain():
+    with pytest.raises(RuntimeError, match="does not price on chain"):
+        FixtureMarket(Settings()).quote_call(WETH, TOKEN, 1, 10000)
 
 
 # -- rendering -------------------------------------------------------------
 
 
 def test_frame_is_a_fixed_rgb_chart():
-    frame = market_frame("DOGE", [1e-7 + i * 1e-10 for i in range(100)], D("1E-7"), D("1.01E-7"))
+    frame = market_frame("PONS", [1e-7 + i * 1e-10 for i in range(100)], D("1E-7"), D("1.01E-7"))
     assert frame.shape == (180, 320, 3)
     assert frame.dtype == np.uint8
 
 
 def test_frame_tolerates_a_short_history():
-    frame = market_frame("DOGE", [1e-7], D("1E-7"), D("1.01E-7"))
+    frame = market_frame("PONS", [1e-7], D("1E-7"), D("1.01E-7"))
     assert frame.shape == (180, 320, 3)
 
 
@@ -215,6 +220,12 @@ def test_frame_tolerates_a_short_history():
 )
 def test_tick_label_keeps_four_significant_figures(value, expected):
     assert tick_label(D(value)) == expected
+
+
+def test_market_exposes_its_pool_for_screening():
+    settings = Settings()
+    market = build(settings=settings)
+    assert market.pool("PONS") == POOL
 
 
 def test_to_wei_truncates_rather_than_rounds_up():

@@ -1,22 +1,115 @@
-"""Execution limits can veto a neural proposal, never substitute a strategy."""
+"""Execution limits can veto a neural proposal, never substitute a strategy.
 
+Three things happen here that did not upstream, and all three only ever remove
+options:
+
+- **Dollar limits.** Sizes are configured in dollars and converted at the
+  current ETH/USD reference every observation, so a $10 order stays a $10 order.
+- **Adaptation.** Order size shrinks as realised volatility rises, and stops
+  entirely past the configured ceiling. The cooldown stretches after a losing
+  streak. Neither can grow a position past the configured cap.
+- **The rug screen.** A buy the screen rejects does not happen. A sell is never
+  screened and never blocked: whatever the screen thinks of a token, a run that
+  holds it must always be able to get out.
+
+One upstream check moved. The round-trip cost limit used to gate the whole
+observation, which on a memecoin list means one token whose pool has been
+drained freezes every trade in every other token. It now gates only the token
+being traded, and for the exit from a token already recorded as a rug it is
+relaxed to `rug_exit_spread`: a wide spread is the price of leaving a drained
+pool, and holding to zero is worse. The on-chain minimum output still applies.
+"""
+
+import math
 import time
 
 from .config import D, QUOTE_DECIMALS, from_wei, to_wei
 from .fees import gross_fee_wei
+from .pricing import usd_to_weth
 
 
 class Veto(Exception):
     pass
 
 
+def realised_volatility(history, window):
+    """Standard deviation of per-observation log returns."""
+    values = [float(v) for v in history[-(window + 1) :] if v and v > 0]
+    if len(values) < 3:
+        return None
+    returns = [math.log(b / a) for a, b in zip(values, values[1:]) if a > 0 and b > 0]
+    if len(returns) < 2:
+        return None
+    mean = sum(returns) / len(returns)
+    variance = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+    return D(str(math.sqrt(variance)))
+
+
 class Guard:
-    def __init__(self, settings, ledger, stop_file):
+    def __init__(self, settings, ledger, stop_file, screen=None):
         self.s = settings
         self.l = ledger
         self.stop_file = stop_file
+        self.screen = screen
 
-    def check(self, quotes, now):
+    # -- dollar limits, converted per observation ---------------------------
+
+    def limits(self, eth_usd):
+        return {
+            "eth_usd": D(eth_usd),
+            "order_limit": usd_to_weth(self.s.order_limit_usd, eth_usd),
+            "min_order": usd_to_weth(self.s.min_order_usd, eth_usd),
+            "loss_stop": usd_to_weth(self.s.loss_stop_usd, eth_usd),
+            "reward_deadband": usd_to_weth(self.s.reward_deadband_usd, eth_usd),
+        }
+
+    # -- adaptation ---------------------------------------------------------
+
+    def size_scale(self, history):
+        """Shrink toward the floor as volatility rises. Never above 1."""
+        if not self.s.adapt_enabled or not history:
+            return D(1), None
+        vol = realised_volatility(history, self.s.volatility_window)
+        if vol is None:
+            return D(1), None
+        calm = D(self.s.calm_volatility)
+        wild = D(self.s.max_volatility)
+        if vol <= calm:
+            return D(1), vol
+        if vol >= wild:
+            raise Veto(f"realised volatility {vol * 100:.1f}% above the ceiling")
+        floor = D(self.s.min_size_scale)
+        span = (vol - calm) / (wild - calm)
+        return D(1) - (D(1) - floor) * span, vol
+
+    def exiting_a_rug(self, product, side):
+        return side == "SELL" and self.l.is_blocked(product)
+
+    def spread_limit(self, product, side):
+        """The round-trip cost this trade may pay. Wider only to leave a rug."""
+        if self.exiting_a_rug(product, side):
+            return D(self.s.rug_exit_spread)
+        return D(self.s.spread_limit)
+
+    def move_tolerance(self, product, side):
+        """How far the execution quote may sit from the one the fly saw."""
+        if self.exiting_a_rug(product, side):
+            return D(self.s.rug_exit_spread)
+        return D(self.s.slippage)
+
+    def cooldown_seconds(self):
+        base = D(self.s.interval_seconds)
+        if not self.s.adapt_enabled:
+            return base
+        streak = int(self.l.get("loss_streak") or 0)
+        if streak < 2:
+            return base
+        return base * D(self.s.loss_cooldown_multiplier)
+
+    # -- the guard ----------------------------------------------------------
+
+    def check(self, quotes, now, eth_usd):
+        limits = self.limits(eth_usd)
         if self.stop_file.exists():
             raise Veto("STOP file present")
         if self.l.get("halted"):
@@ -30,25 +123,48 @@ class Guard:
                 raise Veto("Quote identity mismatch")
             if not -0.5 <= now - q.timestamp <= self.s.max_quote_age:
                 raise Veto("Stale or future quote")
-            if q.round_trip > D(self.s.spread_limit):
-                raise Veto("Round-trip cost above limit")
-        if self.l.equity(quotes) <= D(self.l.get("initial_cash")) - D(self.s.loss_stop):
+        if self.l.equity(quotes) <= D(self.l.get("initial_cash")) - limits["loss_stop"]:
             self.l.halt("Loss stop reached; holdings remain exposed")
             raise Veto("Loss stop reached")
 
-    def plan(self, product, side, quotes, now=None, gas_price_wei=None):
+    def plan(
+        self,
+        product,
+        side,
+        quotes,
+        eth_usd,
+        now=None,
+        gas_price_wei=None,
+        history=None,
+        pool=None,
+    ):
         now = time.time() if now is None else now
-        self.check(quotes, now)
+        self.check(quotes, now, eth_usd)
+        limits = self.limits(eth_usd)
         if product not in self.s.products or side not in ("BUY", "SELL"):
             raise Veto("Invalid neural proposal")
-        if now - self.l.get("last_attempt") < self.s.interval_seconds:
+        if now - self.l.get("last_attempt") < float(self.cooldown_seconds()):
             raise Veto("Order cooldown")
         if self.l.attempts_today(now) >= self.s.daily_orders:
             raise Veto("Daily order limit")
         q = quotes[product]
+        if q.round_trip > self.spread_limit(product, side):
+            raise Veto("Round-trip cost above limit")
+        if side == "SELL":
+            # Volatility scales buys down and can stop them; it never stops an exit.
+            scale, volatility = D(1), None
+        else:
+            scale, volatility = self.size_scale(history)
+        order_limit = limits["order_limit"] * scale
         slip = D(1) - D(self.s.slippage)
         if side == "BUY":
-            budget = min(D(self.s.order_limit), self.l.cash)
+            # A buy is the only thing the screen can stop. It runs before any
+            # sizing so a rejected token costs no further work.
+            if self.screen is not None:
+                self.screen.require(product, pool, eth_usd, now)
+            elif self.l.is_blocked(product):
+                raise Veto(f"{product} is blocklisted: {self.l.block_reason(product)}")
+            budget = min(order_limit, self.l.cash)
             notional_wei = to_wei(budget, QUOTE_DECIMALS)
             fee_wei = gross_fee_wei(notional_wei, self.s.protocol_fee_bps)
             amount_in_wei = notional_wei - fee_wei
@@ -59,7 +175,9 @@ class Guard:
             token_in, token_out = "QUOTE", "BASE"
         else:
             held = self.l.positions.get(product, D(0))
-            size = min(held, D(self.s.order_limit) / q.ask)
+            # An exit is never scaled down by volatility and never capped by a
+            # screen: getting out of a bad token is the one thing that must work.
+            size = min(held, limits["order_limit"] / q.ask)
             amount_in_wei = to_wei(size, q.base_decimals)
             if amount_in_wei <= 0:
                 raise Veto("No position to sell")
@@ -70,7 +188,7 @@ class Guard:
             token_in, token_out = "BASE", "QUOTE"
         if min_out_wei <= 0:
             raise Veto("Slippage bound rounds the minimum output to zero")
-        if notional_wei < to_wei(self.s.min_order_quote, QUOTE_DECIMALS):
+        if notional_wei < to_wei(limits["min_order"], QUOTE_DECIMALS):
             raise Veto("Order notional below the configured minimum")
         gas_cost_wei = 0
         if gas_price_wei is not None:
@@ -85,11 +203,15 @@ class Guard:
             "amount_in_wei": str(amount_in_wei),
             "min_out_wei": str(min_out_wei),
             "notional_wei": str(notional_wei),
+            "notional_usd": str(from_wei(notional_wei, QUOTE_DECIMALS) * D(eth_usd)),
             "planned_fee_wei": str(fee_wei),
             "fee_bps": self.s.protocol_fee_bps,
             "fee_basis": "input" if side == "BUY" else "output",
             "base_decimals": q.base_decimals,
             "pool_fee": q.pool_fee,
+            "eth_usd": str(D(eth_usd)),
+            "size_scale": str(scale),
+            "volatility": str(volatility) if volatility is not None else None,
             "gas_limit": self.s.gas_limit,
             "gas_cost_estimate_wei": str(gas_cost_wei),
             "observed_bid": str(q.bid),

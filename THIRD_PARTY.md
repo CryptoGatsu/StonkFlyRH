@@ -32,8 +32,10 @@ edges. Downloaded and checksum-verified by `python -m stonkflyrh prepare`; see
 | `pydantic` | validating the neural proposal at the action boundary |
 | `python-dotenv` | reading `.env` from the working directory only |
 
-The website is served from the standard library; it pulls in no framework and loads no
-script or font from a CDN.
+The website is served from the standard library and pulls in no framework. It links
+JetBrains Mono and Archivo from Google Fonts with a system fallback stack; a viewer
+without that host sees the system faces. Posting to X signs OAuth 1.0a with `hmac` and
+`hashlib` from the standard library.
 
 ## Contracts
 

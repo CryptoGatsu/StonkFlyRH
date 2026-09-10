@@ -7,7 +7,11 @@
     "code, a router and quoter that disagree about their factory, a token whose",
     "on-chain symbol or decimals differ from what you wrote here, and any pair",
     "with no pool at the configured fee tier.",
-    "pool_fee is the Uniswap v3 tier in hundredths of a bip: 500, 3000 or 10000."
+    "Dollar limits need an ETH/USD reference: 'eth_usd_feed' is a Chainlink",
+    "aggregator (preferred); 'stable' prices a WETH probe through a stablecoin",
+    "pool via the same quoter instead. USDG is the chain's settlement stablecoin.",
+    "pool_fee is the Uniswap v3 tier in hundredths of a bip: 500, 3000 or 10000.",
+    "A Pons launch graduates into a 1% pool with permanently locked liquidity."
   ],
   "robinhood-mainnet": {
     "quote": {
@@ -17,8 +21,15 @@
     },
     "router": "0x0000000000000000000000000000000000000000",
     "quoter": "0x0000000000000000000000000000000000000000",
+    "eth_usd_feed": "0x0000000000000000000000000000000000000000",
+    "stable": {
+      "symbol": "USDG",
+      "address": "0x0000000000000000000000000000000000000000",
+      "decimals": 6,
+      "pool_fee": 500
+    },
     "tokens": {
-      "DOGE": {
+      "PONS": {
         "address": "0x0000000000000000000000000000000000000000",
         "decimals": 18,
         "pool_fee": 10000
@@ -33,6 +44,7 @@
     },
     "router": "0x0000000000000000000000000000000000000000",
     "quoter": "0x0000000000000000000000000000000000000000",
+    "eth_usd_feed": "0x0000000000000000000000000000000000000000",
     "tokens": {}
   }
 }

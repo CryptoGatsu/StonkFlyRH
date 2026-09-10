@@ -5,15 +5,16 @@ import re
 from dataclasses import asdict, dataclass
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 
-# Robinhood Chain memecoins trade against wrapped ETH, so every amount in this
-# configuration is denominated in WETH rather than in dollars.
+# Robinhood Chain memecoins trade against wrapped ETH, so the ledger is
+# denominated in WETH. Limits are configured in dollars and converted every tick
+# from the chain's own ETH/USD reference, because a fixed WETH cap silently
+# becomes a different dollar cap as ETH moves.
 QUOTE_SYMBOL = "WETH"
 QUOTE_DECIMALS = 18
 
-# Blast-radius caps. Upstream limited a run to $100 of capital and $10 an order;
-# these are the same idea in the quote asset of this chain.
-MAX_CAPITAL = Decimal("1")
-MAX_ORDER = Decimal("0.1")
+# Blast-radius caps. A run cannot be configured past these.
+MAX_CAPITAL_USD = Decimal("1000")
+MAX_ORDER_USD = Decimal("100")
 
 # Uniswap v3 fee tiers, in hundredths of a basis point. Memecoin pools are
 # usually 1%; a tier with no pool is rejected at preflight.
@@ -53,16 +54,19 @@ class Settings:
     """Run parameters. Products are memecoin symbols traded against WETH."""
 
     network: str = "robinhood-mainnet"
-    products: tuple[str, ...] = ("DOGE",)
-    capital: str = "0.05"
-    order_limit: str = "0.005"
-    min_order_quote: str = "0.0005"
-    loss_stop: str = "0.01"
-    protocol_fee_bps: int = 100
+    products: tuple[str, ...] = ("PONS",)
+
+    # -- size, in dollars ---------------------------------------------------
+    capital_usd: str = "100"
+    order_limit_usd: str = "10"
+    min_order_usd: str = "1"
+    loss_stop_usd: str = "25"
+
+    # -- execution ----------------------------------------------------------
+    protocol_fee_bps: int = 0
     pool_fee_tier: int = 10000
-    gas_reserve: str = "0.002"
-    slippage: str = "0.01"
-    spread_limit: str = "0.03"
+    slippage: str = "0.02"
+    spread_limit: str = "0.06"
     max_gas_price_gwei: str = "5"
     max_gas_share: str = "0.25"
     paper_gas_price_gwei: str = "0.05"
@@ -70,21 +74,46 @@ class Settings:
     daily_orders: int = 24
     interval_seconds: float = 60
     max_quote_age: float = 30
+
+    # -- rug screen ---------------------------------------------------------
+    screen_enabled: bool = True
+    min_liquidity_usd: str = "25000"
+    max_transfer_tax: str = "0.05"
+    max_price_impact: str = "0.03"
+    min_pool_observations: int = 4
+    reject_upgradeable: bool = True
+    reject_dangerous_selectors: bool = True
+    screen_ttl_seconds: float = 900
+    rug_drawdown: str = "0.5"
+    rug_exit_spread: str = "0.5"
+
+    # -- adaptation ---------------------------------------------------------
+    adapt_enabled: bool = True
+    volatility_window: int = 30
+    calm_volatility: str = "0.02"
+    max_volatility: str = "0.25"
+    min_size_scale: str = "0.25"
+    loss_cooldown_multiplier: str = "3"
+    rug_tightening: str = "1.5"
+
+    # -- neural -------------------------------------------------------------
     neural_ms: float = 500
     neural_bin_ms: float = 10
     pulse_ms: float = 200
     pulse_current: float = 20
-    reward_deadband: str = "0.00002"
+    rug_pulse_multiplier: str = "2"
+    reward_deadband_usd: str = "0.05"
     decoder_threshold_hz: float = 2
     paper_pool_fee: str = "0.01"
     learning: bool = True
 
     def __post_init__(self):
         from .chain import NETWORKS
-        from .fees import BPS_DENOMINATOR
 
         if self.network not in NETWORKS:
             raise ValueError("Unknown network")
+        if not NETWORKS[self.network].robinhood:
+            raise ValueError("This fork trades Robinhood Chain only")
         if (
             not self.products
             or len(set(self.products)) != len(self.products)
@@ -94,27 +123,22 @@ class Settings:
             raise ValueError("Products must be distinct memecoin symbols, not the quote asset")
         if len(self.products) > 8:
             raise ValueError("At most 8 products per run")
-        if not 0 < D(self.capital) <= MAX_CAPITAL:
-            raise ValueError(f"Maximum capital {MAX_CAPITAL} {QUOTE_SYMBOL}")
-        if not 0 < D(self.order_limit) <= min(D(self.capital), MAX_ORDER):
-            raise ValueError(f"Maximum order {MAX_ORDER} {QUOTE_SYMBOL}")
-        if not 0 < D(self.loss_stop) <= D(self.capital):
-            raise ValueError("Invalid loss stop")
-        if not 0 < D(self.min_order_quote) <= D(self.order_limit):
+        if not 0 < D(self.capital_usd) <= MAX_CAPITAL_USD:
+            raise ValueError(f"Maximum capital ${MAX_CAPITAL_USD}")
+        if not 0 < D(self.order_limit_usd) <= min(D(self.capital_usd), MAX_ORDER_USD):
+            raise ValueError(f"Maximum order ${MAX_ORDER_USD}, and within capital")
+        if not 0 < D(self.min_order_usd) <= D(self.order_limit_usd):
             raise ValueError("Minimum order must be positive and within the order limit")
-        if (
-            type(self.protocol_fee_bps) is not int
-            or not 0 <= self.protocol_fee_bps <= 300
-        ):
+        if not 0 < D(self.loss_stop_usd) <= D(self.capital_usd):
+            raise ValueError("Invalid loss stop")
+        if type(self.protocol_fee_bps) is not int or not 0 <= self.protocol_fee_bps <= 300:
             raise ValueError("Protocol fee must be 0-300 bps")
         if self.pool_fee_tier not in POOL_FEE_TIERS:
             raise ValueError("Unsupported Uniswap v3 fee tier")
-        if not D(0) < D(self.gas_reserve) <= D(self.capital) / 2:
-            raise ValueError("Gas reserve must be positive and well under capital")
-        if not D(0) <= D(self.slippage) <= D("0.05"):
-            raise ValueError("Slippage tolerance must be 0-5%")
-        if not D(0) < D(self.spread_limit) <= D("0.10"):
-            raise ValueError("Round-trip impact limit must be 0-10%")
+        if not D(0) <= D(self.slippage) <= D("0.10"):
+            raise ValueError("Slippage tolerance must be 0-10%")
+        if not D(0) < D(self.spread_limit) <= D("0.20"):
+            raise ValueError("Round-trip impact limit must be 0-20%")
         if not D(0) < D(self.max_gas_price_gwei) <= D(1000):
             raise ValueError("Invalid gas price ceiling")
         if not D(0) < D(self.max_gas_share) <= D("0.5"):
@@ -132,10 +156,49 @@ class Settings:
             or self.interval_seconds < 60
         ):
             raise ValueError("Rate limit: >=60 s between orders, <=100 orders/day")
-        if D(self.reward_deadband) <= 0:
+        self._check_screen()
+        self._check_adaptation()
+        self._check_neural()
+
+    def _check_screen(self):
+        if D(self.min_liquidity_usd) < 0:
+            raise ValueError("Liquidity floor cannot be negative")
+        if not D(0) <= D(self.max_transfer_tax) <= D("0.5"):
+            raise ValueError("Transfer tax ceiling must be 0-50%")
+        if not D(0) < D(self.max_price_impact) <= D("0.5"):
+            raise ValueError("Price impact ceiling must be 0-50%")
+        if type(self.min_pool_observations) is not int or self.min_pool_observations < 0:
+            raise ValueError("Pool observation floor must be a non-negative integer")
+        if type(self.reject_upgradeable) is not bool:
+            raise ValueError("reject_upgradeable is a flag")
+        if type(self.reject_dangerous_selectors) is not bool:
+            raise ValueError("reject_dangerous_selectors is a flag")
+        if not math.isfinite(self.screen_ttl_seconds) or self.screen_ttl_seconds <= 0:
+            raise ValueError("Screen cache must expire")
+        if not D(0) < D(self.rug_drawdown) < 1:
+            raise ValueError("Rug drawdown must be a fraction between 0 and 1")
+        if not D(self.spread_limit) <= D(self.rug_exit_spread) <= D("0.9"):
+            raise ValueError("Rug exit spread must be at least the normal limit and under 90%")
+
+    def _check_adaptation(self):
+        if type(self.adapt_enabled) is not bool:
+            raise ValueError("adapt_enabled is a flag")
+        if type(self.volatility_window) is not int or not 5 <= self.volatility_window <= 120:
+            raise ValueError("Volatility window must be 5-120 observations")
+        if not D(0) < D(self.calm_volatility) < D(self.max_volatility) <= D(1):
+            raise ValueError("Volatility band must be ordered and within 100%")
+        if not D(0) < D(self.min_size_scale) <= D(1):
+            raise ValueError("Size scale floor must be a fraction of the order limit")
+        if not D(1) <= D(self.loss_cooldown_multiplier) <= D(20):
+            raise ValueError("Loss cooldown multiplier must be 1-20")
+        if not D(1) <= D(self.rug_tightening) <= D(5):
+            raise ValueError("Rug tightening must be 1-5")
+
+    def _check_neural(self):
+        if D(self.reward_deadband_usd) <= 0:
             raise ValueError("Positive reinforcement deadband required")
-        if self.protocol_fee_bps > BPS_DENOMINATOR:
-            raise ValueError("Protocol fee exceeds 100%")
+        if not D(1) <= D(self.rug_pulse_multiplier) <= D(5):
+            raise ValueError("Rug pulse multiplier must be 1-5")
         for x in [
             self.max_quote_age,
             self.neural_ms,
@@ -148,6 +211,8 @@ class Settings:
                 raise ValueError("Positive finite parameter required")
         if self.neural_bin_ms > 10 or self.pulse_ms > self.neural_ms:
             raise ValueError("Use <=10 ms neural bins; pulse must fit a decision window")
+        if D(self.rug_pulse_multiplier) * D(self.pulse_ms) > D(self.neural_ms):
+            raise ValueError("A rug pulse must still fit inside a decision window")
         if any(
             abs(x * 10 - round(x * 10)) > 1e-7
             for x in [self.neural_ms, self.neural_bin_ms, self.pulse_ms]

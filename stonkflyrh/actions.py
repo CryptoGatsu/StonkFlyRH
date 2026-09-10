@@ -41,6 +41,9 @@ class StonkflyRHActions:
         self.network_id = network_id
         self.quotes = {}
         self.gas_price_wei = None
+        self.eth_usd = None
+        self.history = None
+        self.pools = {}
 
     def supports_network(self, network):
         return (
@@ -63,8 +66,16 @@ class StonkflyRHActions:
 
     def invoke(self, args):
         p = Proposal.model_validate(args)
+        if self.eth_usd is None:
+            raise RuntimeError("No ETH/USD reference for this observation")
         plan = self.guard.plan(
-            p.product, p.side, self.quotes, gas_price_wei=self.gas_price_wei
+            p.product,
+            p.side,
+            self.quotes,
+            self.eth_usd,
+            gas_price_wei=self.gas_price_wei,
+            history=(self.history or {}).get(p.product),
+            pool=self.pools.get(p.product),
         )
         plan["neural_observation"] = self.guard.l.get("observation")
         plan["checkpoint"] = self.guard.l.get("checkpoint")

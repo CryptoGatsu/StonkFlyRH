@@ -2,7 +2,8 @@
 
 # StonkFlyRH
 
-A fly-connectome simulation that trades memecoins on **Robinhood Chain**. A fork of
+A fly-connectome simulation that trades memecoins on **Robinhood Chain**, screens
+them for rugs first, and posts what it does to X. A fork of
 [nftechie/stonkfly](https://github.com/nftechie/stonkfly), which traded Coinbase spot.
 Actual neural output, actual on-chain swaps, a live website. Profitable learning has
 not been demonstrated.
@@ -10,45 +11,55 @@ not been demonstrated.
 **How it works:** Uniswap v3 quotes from Robinhood Chain (chain id 4663) become an RGB
 chart. It stimulates 3,335 brightness inputs and 811 R8 color inputs in the retained
 **MaleCNS v1.0 graph: 166,700 neurons, 25.6 million connections**. A fixed neural readout
-proposes buy, sell or hold. A guarded action provider checks limits and sends one
-`exactInputSingle` swap against the memecoin's WETH pool from a local keystore wallet.
+proposes buy, sell or hold. A guarded action provider checks the dollar limits and the
+rug screen, then sends one `exactInputSingle` swap from the fly wallet.
 
 Positive portfolio P&L stimulates 15 identified PAM11 dopamine cells; negative P&L
-stimulates two PPL101 aversive dopamine cells. A candidate memory rule changes existing
-KC-to-MBON connections. These are engineered reinforcement signals, **not modeled pain
-receptors**. Synaptic changes do not establish that it learns to trade profitably.
-[Model and evidence](docs/model.md).
+stimulates two PPL101 aversive dopamine cells — and a **rug it bought stimulates them
+for twice as long**. A candidate memory rule changes existing KC-to-MBON connections.
+These are engineered reinforcement signals, **not modeled pain receptors**. Synaptic
+changes do not establish that it learns to trade profitably. [Model](docs/model.md) ·
+[Rug screen](docs/safety.md).
 
 ## Live trade site
 
 ![The live trade dashboard](assets/site.png)
 
 ```sh
-python -m stonkflyrh serve --out runs/paper
+python -m stonkflyrh serve --out runs/paper      # live, read-only, 127.0.0.1:8787
+python -m stonkflyrh preview --out runs/paper    # one static page that replays the run
 ```
 
-A read-only page at `http://127.0.0.1:8787` that streams every tick as it happens: the
-trade feed with signal, price, execution and explorer link; equity and positions; the
-chart frame the connectome is looking at right now; and the fee split. It tails the
+Every tick streams as it happens: the feed with signal, dollar size, execution and
+explorer link; the rug screen's verdict on each token; positions; the chart frame the
+connectome is looking at right now; and every post it made to X. The site tails the
 worker's log and ledger, holds no key, and can place no trade.
 
-## Fees
+## Limits, in dollars
 
-Every fill accrues a protocol fee in WETH, split the moment it is booked:
-
-| Share | Goes to |
+| | Default |
 | --- | --- |
-| **20%** | the development wallet (`STONKFLYRH_DEV_WALLET`) |
-| 80% | the fee wallet this repo creates for you |
+| Capital | **$100** |
+| Per trade | **$10**, shrinking as realised volatility rises |
+| Minimum trade | $1 |
+| Loss stop | $25 — stops new orders, does not liquidate |
+| Orders | 24 a day, 60 s apart, 3× longer after a losing streak |
 
-The split is integer wei with the remainder to the treasury, so the two shares always
-add back to the gross exactly. 20% is a constant in `stonkflyrh/fees.py`, not a setting.
-Fees are swept in batches rather than transferred per swap:
+Dollar limits are reconverted every observation from the chain's ETH/USD reference
+(Chainlink, or a USDG pool through the same quoter), so $10 stays $10 when ETH moves.
+The ledger itself is WETH, which is what the wallet holds.
 
-```sh
-python -m stonkflyrh fees --out runs/live              # what is owed
-python -m stonkflyrh fees --out runs/live --sweep      # pay it out
-```
+## The rug screen
+
+Before any buy, nine questions asked of the chain itself — is it a proxy, does the
+bytecode carry a mint/blacklist/fee-setter, is ownership renounced, is there liquidity,
+is the pool new, **can it be sold back**, what does a round trip cost at a tiny size
+(the transfer tax) and at the run's size (the impact). A token that fails is not
+bought. A sell is never screened: getting out must always work.
+
+If a held token collapses anyway, it is blocklisted for the run, the fly takes the
+longer aversive pulse, the screen tightens for everything after it, and the exit is
+allowed through the drained pool's wide spread. [Details and limits](docs/safety.md).
 
 ## Run it
 
@@ -64,41 +75,40 @@ python -m stonkflyrh run --fixture
 ```
 
 `--fixture` needs no network and no addresses. Drop it for paper trading against real
-Robinhood Chain quotes, which needs `tokens.json` (below). Default: **paper trades,
-0.05 WETH of simulated balance**. No key needed. Local logs, sensory images and
-resumable brain state go in `runs/paper/`. Ctrl-C stops it; the same command resumes.
+Robinhood Chain quotes and the real screen, which needs `tokens.json` (below).
+Default: **paper trades, $100 simulated**. Local logs, sensory images and resumable
+brain state go in `runs/paper/`. Ctrl-C stops it; the same command resumes.
 
 ## Real swaps
 
-**No contract address ships in this repository.** Robinhood Chain's Uniswap deployments
-and memecoin tokens are yours to look up and verify. Copy `tokens.example.json` to
-`tokens.json`, fill it in, and check it against the chain:
+**No contract address ships in this repository.** Copy `tokens.example.json` to
+`tokens.json`, fill in the Uniswap router and quoter, WETH, an ETH/USD reference and
+the tokens you want, then check it against the chain:
 
 ```sh
-python -m stonkflyrh chain verify --products DOGE
+python -m stonkflyrh chain verify --products PONS
+python -m stonkflyrh screen --products PONS         # what the rug screen thinks
 ```
 
-That refuses an address holding no code, a router and quoter that disagree about their
-factory, a token whose on-chain symbol or decimals differ from your file, and any pair
-with no pool at the configured fee tier.
-
-Then create the wallets, fund the trading wallet with **at most 0.05 WETH** plus a little
-ETH for gas, copy `.env.example` to `.env` and fill it in locally:
+Import the fly wallet — the key must derive `0x68e8…3201` or nothing is written — fund
+it with **at most $100 of WETH** plus a little ETH for gas, copy `.env.example` to
+`.env`, then:
 
 ```sh
-python -m stonkflyrh wallet create
+python -m stonkflyrh wallet import
 python -m stonkflyrh run --live --preflight-only
 python -m stonkflyrh run --live
 ```
 
-Defaults: 0.005 WETH maximum order, 24 attempts/day, 1% slippage bound, no leverage.
-A 0.01 WETH drawdown stops new orders; **it does not liquidate holdings or cap further
-losses**. [Operation and recovery](docs/operations.md).
+Posting to X needs the four app credentials in `.env` and `STONKFLYRH_POST_TO_X=1`;
+without them every post is still drafted to `posts.jsonl` and shown on the site.
+[Operation and recovery](docs/operations.md).
 
 ```sh
 python -m stonkflyrh status
 python -m pytest -q
 ```
 
-The repo does not come funded or connected to anyone's wallet. Live execution needs your
-local keystore and explicit opt-in.
+Robinhood Chain only: any other network is rejected at configuration. The repo does
+not come funded or connected to anyone's wallet. Live execution needs your local
+keystore and explicit opt-in.

@@ -1,7 +1,7 @@
-"""The live broker's accounting, driven by in-memory chain doubles.
+"""The live broker's accounting and the fee sweeper, on in-memory doubles.
 
-Nothing here signs, broadcasts or contacts an endpoint. What is exercised is the
-part that decides how much was traded and how much of the fee is owed to whom.
+Nothing here signs, broadcasts or contacts an endpoint. What is exercised is
+the part that decides how much was traded and how much is owed.
 """
 
 import time
@@ -10,17 +10,23 @@ import pytest
 
 from stonkflyrh.broker import RobinhoodChainBroker, UnresolvedOrder
 from stonkflyrh.config import D, QUOTE_DECIMALS, Settings, to_wei
-from stonkflyrh.fees import split_fee
 from stonkflyrh.ledger import Ledger
 from stonkflyrh.payouts import FeeSweeper
 from stonkflyrh.risk import Guard
-from tests.test_execution import quote
+from tests.test_execution import CAPITAL, ETH_USD, quote
 
 WETH = "0x" + "11" * 20
-DOGE = "0x" + "22" * 20
+TOKEN = "0x" + "22" * 20
 TRADER = "0x" + "33" * 20
 FEE_WALLET = "0x" + "44" * 20
-DEV_WALLET = "0x" + "de" * 20
+
+
+class Held:
+    def __init__(self, value):
+        self.value = value
+
+    def call(self, *_a, **_k):
+        return self.value
 
 
 class Balances:
@@ -38,14 +44,6 @@ class Balances:
         return Held(WETH)
 
 
-class Held:
-    def __init__(self, value):
-        self.value = value
-
-    def call(self, *_a, **_k):
-        return self.value
-
-
 class FakeClient:
     net = type(
         "Net",
@@ -61,7 +59,7 @@ class FakeClient:
         self.balances = {"quote": quote_wei, "base": base_wei, "gas": gas_wei}
 
     def contract(self, address, abi):
-        token = "base" if address.lower() == DOGE.lower() else "quote"
+        token = "base" if address.lower() == TOKEN.lower() else "quote"
         return type("C", (), {"functions": Balances(self, token)})()
 
     def erc20(self, address):
@@ -80,9 +78,9 @@ class FakeRegistry:
     quoter = "0x" + "66" * 20
 
     def token(self, symbol):
-        return {"symbol": symbol, "address": DOGE, "decimals": 18}
+        return {"symbol": symbol, "address": TOKEN, "decimals": 18}
 
-    def pool_fee(self, symbol, default):
+    def pool_fee(self, _symbol, default):
         return default
 
 
@@ -92,7 +90,7 @@ class FakeAccount:
 
 def broker(tmp_path, client=None, settings=None):
     settings = settings or Settings()
-    ledger = Ledger(tmp_path / "ledger.sqlite", settings, "live")
+    ledger = Ledger(tmp_path / "ledger.sqlite", settings, "live", CAPITAL)
     client = client or FakeClient()
     b = RobinhoodChainBroker(
         settings, ledger, client, FakeRegistry(), {}, FakeAccount(), FEE_WALLET
@@ -101,35 +99,8 @@ def broker(tmp_path, client=None, settings=None):
 
 
 def plan_for(guard, ledger, side, quotes=None):
-    quotes = quotes or {"DOGE": quote()}
-    return ledger.reserve(guard.plan("DOGE", side, quotes), time.time())
-
-
-# -- leg resolution --------------------------------------------------------
-
-
-def test_buy_spends_weth_and_receives_the_memecoin(tmp_path):
-    b, ledger, guard = broker(tmp_path)
-    try:
-        p = plan_for(guard, ledger, "BUY")
-        assert b.token_address(p, "in") == WETH
-        assert b.token_address(p, "out") == DOGE
-    finally:
-        ledger.close()
-
-
-def test_sell_spends_the_memecoin_and_receives_weth(tmp_path):
-    b, ledger, guard = broker(tmp_path)
-    try:
-        ledger.put("positions", {"DOGE": "50000"})
-        p = plan_for(guard, ledger, "SELL")
-        assert b.token_address(p, "in") == DOGE
-        assert b.token_address(p, "out") == WETH
-    finally:
-        ledger.close()
-
-
-# -- booking a mined swap --------------------------------------------------
+    quotes = quotes or {"PONS": quote()}
+    return ledger.reserve(guard.plan("PONS", side, quotes, ETH_USD), time.time())
 
 
 def receipt(gas_used=200000, price=10**8):
@@ -140,6 +111,33 @@ def receipt(gas_used=200000, price=10**8):
         "effective_gas_price": price,
         "block": 42,
     }
+
+
+# -- leg resolution --------------------------------------------------------
+
+
+def test_buy_spends_weth_and_receives_the_memecoin(tmp_path):
+    b, ledger, guard = broker(tmp_path)
+    try:
+        p = plan_for(guard, ledger, "BUY")
+        assert b.token_address(p, "in") == WETH
+        assert b.token_address(p, "out") == TOKEN
+    finally:
+        ledger.close()
+
+
+def test_sell_spends_the_memecoin_and_receives_weth(tmp_path):
+    b, ledger, guard = broker(tmp_path)
+    try:
+        ledger.put("positions", {"PONS": "40000"})
+        p = plan_for(guard, ledger, "SELL")
+        assert b.token_address(p, "in") == TOKEN
+        assert b.token_address(p, "out") == WETH
+    finally:
+        ledger.close()
+
+
+# -- booking a mined swap --------------------------------------------------
 
 
 def test_buy_is_booked_from_balance_deltas(tmp_path):
@@ -155,12 +153,7 @@ def test_buy_is_booked_from_balance_deltas(tmp_path):
         assert result["status"] == "SETTLED"
         assert int(result["base_wei"]) == received
         assert int(result["quote_wei"]) == spent
-        assert int(result["fee_wei"]) == int(p["planned_fee_wei"])
-        assert int(result["dev_fee_wei"]) == int(result["fee_wei"]) * 2 // 10
-        assert int(result["dev_fee_wei"]) + int(result["treasury_fee_wei"]) == int(
-            result["fee_wei"]
-        )
-        assert ledger.positions["DOGE"] > 0
+        assert ledger.positions["PONS"] > 0
     finally:
         ledger.close()
 
@@ -175,17 +168,17 @@ def test_a_transfer_taxing_token_books_what_actually_arrived(tmp_path):
         before = {"quote": int(p["amount_in_wei"]), "base": 0, "gas": 10**16}
         client.balances = {"quote": 0, "base": arrived, "gas": 10**16}
         b._book(p["client_order_id"], p, receipt(), before)
-        assert to_wei(ledger.positions["DOGE"], 18) == arrived
+        assert to_wei(ledger.positions["PONS"], 18) == arrived
     finally:
         ledger.close()
 
 
 def test_sell_fee_is_taken_from_realised_proceeds(tmp_path):
+    settings = Settings(protocol_fee_bps=100)
     client = FakeClient()
-    settings = Settings()
     b, ledger, guard = broker(tmp_path, client, settings)
     try:
-        ledger.put("positions", {"DOGE": "50000"})
+        ledger.put("positions", {"PONS": "40000"})
         p = plan_for(guard, ledger, "SELL")
         sold = int(p["amount_in_wei"])
         proceeds = int(p["min_out_wei"]) + 10**12
@@ -196,7 +189,6 @@ def test_sell_fee_is_taken_from_realised_proceeds(tmp_path):
         assert int(result["fee_wei"]) == expected_fee
         # Realised proceeds beat the plan's estimate, so the fee did too.
         assert expected_fee != int(p["planned_fee_wei"])
-        assert int(result["dev_fee_wei"]) == split_fee(expected_fee)[0]
     finally:
         ledger.close()
 
@@ -232,7 +224,7 @@ def test_a_swap_that_moved_nothing_is_unresolved(tmp_path):
 
 def test_unswept_fees_are_expected_to_sit_in_the_wallet(tmp_path):
     client = FakeClient()
-    b, ledger, guard = broker(tmp_path, client)
+    b, ledger, guard = broker(tmp_path, client, Settings(protocol_fee_bps=100))
     try:
         p = plan_for(guard, ledger, "BUY")
         before = {"quote": int(p["amount_in_wei"]), "base": 0, "gas": 10**16}
@@ -246,7 +238,7 @@ def test_unswept_fees_are_expected_to_sit_in_the_wallet(tmp_path):
 
 
 def test_an_external_transfer_stops_the_run(tmp_path):
-    client = FakeClient(quote_wei=to_wei("0.05", QUOTE_DECIMALS))
+    client = FakeClient(quote_wei=to_wei(CAPITAL, QUOTE_DECIMALS))
     b, ledger, _ = broker(tmp_path, client)
     try:
         b.verify_balances()
@@ -257,98 +249,108 @@ def test_an_external_transfer_stops_the_run(tmp_path):
         ledger.close()
 
 
+def test_live_preflight_needs_the_price_reference(tmp_path):
+    client = FakeClient(quote_wei=to_wei(CAPITAL, QUOTE_DECIMALS))
+    b, ledger, _ = broker(tmp_path, client)
+    try:
+        with pytest.raises(RuntimeError, match="ETH/USD reference"):
+            b.preflight()
+    finally:
+        ledger.close()
+
+
+def test_live_preflight_caps_funding_at_the_dollar_limit(tmp_path):
+    # $150 in the wallet against a $100 configured stake.
+    client = FakeClient(quote_wei=to_wei(D("150") / ETH_USD, QUOTE_DECIMALS))
+    b, ledger, _ = broker(tmp_path, client)
+    try:
+        with pytest.raises(RuntimeError, match=r"\$100 cap"):
+            b.preflight(ETH_USD)
+    finally:
+        ledger.close()
+
+
 # -- fee payouts -----------------------------------------------------------
 
 
-def sweeper(tmp_path, client=None):
-    settings = Settings()
-    ledger = Ledger(tmp_path / "ledger.sqlite", settings, "live")
+def sweeper(tmp_path, client=None, destination=FEE_WALLET):
+    settings = Settings(protocol_fee_bps=100)
+    ledger = Ledger(tmp_path / "ledger.sqlite", settings, "live", CAPITAL)
     return (
         FeeSweeper(
-            settings,
-            ledger,
-            client or FakeClient(),
-            FakeRegistry(),
-            FakeAccount(),
-            FEE_WALLET,
+            settings, ledger, client or FakeClient(), FakeRegistry(), FakeAccount(), destination
         ),
         ledger,
     )
 
 
-def test_development_destination_requires_a_configured_wallet(tmp_path, monkeypatch):
-    monkeypatch.delenv("STONKFLYRH_DEV_WALLET", raising=False)
+def test_the_destination_is_the_configured_fee_wallet(tmp_path):
     s, ledger = sweeper(tmp_path)
     try:
-        with pytest.raises(RuntimeError, match="nowhere to go"):
-            s.destination("development")
-        assert s.destination("treasury") == FEE_WALLET
+        assert s.destination() == FEE_WALLET
     finally:
         ledger.close()
 
 
-def test_dry_run_reports_the_twenty_eighty_split_without_sending(tmp_path, monkeypatch):
-    monkeypatch.setenv("STONKFLYRH_DEV_WALLET", DEV_WALLET)
+def test_sweeping_to_the_fly_wallet_itself_is_refused(tmp_path):
+    s, ledger = sweeper(tmp_path, destination=TRADER)
+    try:
+        with pytest.raises(RuntimeError, match="only pay gas"):
+            s.destination()
+    finally:
+        ledger.close()
+
+
+def test_dry_run_reports_what_is_owed_without_sending(tmp_path):
     client = FakeClient(quote_wei=10**18)
     s, ledger = sweeper(tmp_path, client)
     try:
         ledger.fees.accrue("order-1", 10**18, 100, 0)  # 0.01 WETH of fee
-        report = s.sweep(dry_run=True)
-        assert report["dev_share_percent"] == 20.0
-        by_name = {p["beneficiary"]: p for p in report["payouts"]}
-        assert by_name["development"]["status"] == "WOULD_SEND"
-        assert by_name["development"]["destination"].lower() == DEV_WALLET
-        assert by_name["development"]["outstanding_wei"] == 2 * 10**15
-        assert by_name["treasury"]["outstanding_wei"] == 8 * 10**15
+        row = s.sweep(dry_run=True)["payouts"][0]
+        assert row["status"] == "WOULD_SEND"
+        assert row["destination"] == FEE_WALLET
+        assert row["outstanding_wei"] == 10**16
         assert not ledger.fees.payouts()  # a dry run records nothing
     finally:
         ledger.close()
 
 
-def test_a_sweep_below_the_threshold_is_skipped(tmp_path, monkeypatch):
-    monkeypatch.setenv("STONKFLYRH_DEV_WALLET", DEV_WALLET)
+def test_a_sweep_below_the_threshold_is_skipped(tmp_path):
     s, ledger = sweeper(tmp_path, FakeClient(quote_wei=10**18))
     try:
         ledger.fees.accrue("order-1", 10**12, 100, 0)
-        statuses = {p["beneficiary"]: p["status"] for p in s.sweep()["payouts"]}
-        assert set(statuses.values()) == {"BELOW_THRESHOLD"}
+        assert s.sweep()["payouts"][0]["status"] == "BELOW_THRESHOLD"
     finally:
         ledger.close()
 
 
-def test_a_sweep_never_sends_more_than_the_wallet_holds(tmp_path, monkeypatch):
-    monkeypatch.setenv("STONKFLYRH_DEV_WALLET", DEV_WALLET)
+def test_a_sweep_never_sends_more_than_the_wallet_holds(tmp_path):
     s, ledger = sweeper(tmp_path, FakeClient(quote_wei=0))
     try:
         ledger.fees.accrue("order-1", 10**18, 100, 0)
-        statuses = {p["beneficiary"]: p["status"] for p in s.sweep()["payouts"]}
-        assert statuses["development"] == "INSUFFICIENT_BALANCE"
+        assert s.sweep()["payouts"][0]["status"] == "INSUFFICIENT_BALANCE"
     finally:
         ledger.close()
 
 
-def test_an_interrupted_payout_is_reconciled_not_resent(tmp_path, monkeypatch):
-    monkeypatch.setenv("STONKFLYRH_DEV_WALLET", DEV_WALLET)
+def test_an_interrupted_payout_is_reconciled_not_resent(tmp_path):
     s, ledger = sweeper(tmp_path, FakeClient(quote_wei=10**18))
     try:
         ledger.fees.accrue("order-1", 10**18, 100, 0)
-        prepared = ledger.fees.record_payout("development", DEV_WALLET, 10**15, 0)
+        ledger.fees.record_payout(FEE_WALLET, 10**15, 0)
         s.reconcile()
         # Nothing is broadcast before a hash is recorded, so PREPARED is a no-op.
-        assert ledger.fees.outstanding("development") == 2 * 10**15
-        rows = {r["status"] for r in ledger.fees.payouts()}
-        assert rows == {"REJECTED"}
-        assert prepared
+        assert ledger.fees.outstanding() == 10**16
+        assert {r["status"] for r in ledger.fees.payouts()} == {"REJECTED"}
     finally:
         ledger.close()
 
 
-def test_a_payout_stuck_without_a_hash_refuses_to_sweep_again(tmp_path, monkeypatch):
-    monkeypatch.setenv("STONKFLYRH_DEV_WALLET", DEV_WALLET)
+def test_a_payout_stuck_without_a_hash_refuses_to_sweep_again(tmp_path):
     s, ledger = sweeper(tmp_path, FakeClient(quote_wei=10**18))
     try:
         ledger.fees.accrue("order-1", 10**18, 100, 0)
-        stuck = ledger.fees.record_payout("development", DEV_WALLET, 10**15, 0)
+        stuck = ledger.fees.record_payout(FEE_WALLET, 10**15, 0)
         ledger.fees.mark_payout(stuck, "UNKNOWN")
         with pytest.raises(RuntimeError, match="no transaction hash"):
             s.sweep()

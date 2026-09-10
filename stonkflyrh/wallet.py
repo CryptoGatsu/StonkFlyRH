@@ -1,17 +1,19 @@
-"""Local wallet creation and loading for Robinhood Chain.
+"""The fly's wallet: importing it, holding it, and refusing the wrong one.
 
-Two wallets, created by `python -m stonkflyrh wallet create`:
+One key lives here — the fly wallet, which holds the run's WETH and gas ETH and
+signs every swap. It is the wallet the operator funds and launches the coin
+from, so the usual flow is `wallet import`, pasting the existing key, rather
+than generating a new one.
 
-    trading  holds the run's capital and signs swaps
-    fee      receives the treasury share of protocol fees
+An imported key must derive the address this fork expects. A private key pasted
+into the wrong terminal is how funds are lost quietly; here it fails loudly.
 
-The development share goes to the configured development wallet, which this
-process only ever sends to; it holds no key for it.
+The fee wallet needs no key. This process only ever sends to it.
 
-Keys are generated locally with os.urandom by way of eth-account, written as
-Web3 Secret Storage keystores encrypted with a password this process never
-stores, and chmod 0600. Nothing here writes a private key to a log, a ledger,
-an event row or the website. The keystore directory is git-ignored.
+Keys are written as Web3 Secret Storage keystores encrypted with a password
+this process never stores, and chmod 0600. Nothing here writes a private key to
+a log, a ledger, an event row, a post or the website. The keystore directory is
+git-ignored.
 """
 
 import getpass
@@ -22,7 +24,20 @@ from pathlib import Path
 
 KEYSTORE_ENV = "STONKFLYRH_KEYSTORE"
 PASSWORD_ENV = "STONKFLYRH_KEYSTORE_PASSWORD"
-ROLES = ("trading", "fee")
+ROLES = ("trading",)
+
+# The fly wallet. An imported key must derive this address unless the operator
+# overrides it with STONKFLYRH_FLY_WALLET.
+FLY_WALLET = "0x68e82397455232f6F726E44ad1c980C6C99B3201"
+
+
+def expected_address():
+    configured = os.environ.get("STONKFLYRH_FLY_WALLET") or FLY_WALLET
+    if not configured:
+        return None
+    from .chain import checksum
+
+    return checksum(configured)
 
 
 def keystore_dir(path=None):
@@ -53,8 +68,7 @@ def _password(role, confirm=False):
         print("Passwords did not match.")
 
 
-def create(role, path=None, overwrite=False):
-    """Generate one wallet. Refuses to clobber an existing keystore."""
+def _write(account, role, path, overwrite):
     from eth_account import Account
 
     target = keystore_path(role, path)
@@ -64,7 +78,6 @@ def create(role, path=None, overwrite=False):
         )
     target.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(target.parent, stat.S_IRWXU)
-    account = Account.create()
     encrypted = Account.encrypt(account.key, _password(role, confirm=True))
     tmp = target.with_suffix(".partial")
     tmp.write_text(json.dumps(encrypted) + "\n")
@@ -73,7 +86,44 @@ def create(role, path=None, overwrite=False):
     return account.address
 
 
-def address(role, path=None):
+def create(role="trading", path=None, overwrite=False):
+    """Generate a fresh wallet. Use `import_key` for an existing fly wallet."""
+    from eth_account import Account
+
+    return _write(Account.create(), role, path, overwrite)
+
+
+def import_key(private_key, role="trading", path=None, overwrite=False, expect=None):
+    """Encrypt an existing key, refusing one that is not the fly wallet."""
+    from eth_account import Account
+    from eth_utils import to_checksum_address
+
+    key = private_key.strip()
+    if key.startswith("0x"):
+        key = key[2:]
+    if len(key) != 64 or any(c not in "0123456789abcdefABCDEF" for c in key):
+        raise RuntimeError("A private key is 64 hex characters, optionally 0x-prefixed")
+    account = Account.from_key(bytes.fromhex(key))
+    want = expect if expect is not None else expected_address()
+    if want and to_checksum_address(account.address) != to_checksum_address(want):
+        raise RuntimeError(
+            f"That key derives {account.address}, not the expected fly wallet {want}. "
+            "Nothing was written."
+        )
+    return _write(account, role, path, overwrite)
+
+
+def read_key_interactively():
+    if os.environ.get("STONKFLYRH_PRIVATE_KEY"):
+        return os.environ["STONKFLYRH_PRIVATE_KEY"]
+    if not os.isatty(0):
+        raise RuntimeError(
+            "Paste the key interactively, or set STONKFLYRH_PRIVATE_KEY for this one command"
+        )
+    return getpass.getpass("Fly wallet private key (not echoed): ")
+
+
+def address(role="trading", path=None):
     """Read the address out of a keystore without decrypting the key."""
     target = keystore_path(role, path)
     if not target.exists():
@@ -83,30 +133,33 @@ def address(role, path=None):
     return to_checksum_address("0x" + json.loads(target.read_text())["address"])
 
 
-def load(role, path=None):
-    """Decrypt one wallet. Only the trading wallet ever needs this to trade."""
+def load(role="trading", path=None):
     from eth_account import Account
 
     target = keystore_path(role, path)
     if not target.exists():
         raise RuntimeError(
-            f"No {role} keystore at {target}. Run: python -m stonkflyrh wallet create"
+            f"No {role} keystore at {target}. Run: python -m stonkflyrh wallet import"
         )
     mode = stat.S_IMODE(target.stat().st_mode)
     if mode & (stat.S_IRWXG | stat.S_IRWXO):
         raise RuntimeError(f"{target} is group/world readable; chmod 600 it")
     key = Account.decrypt(json.loads(target.read_text()), _password(role))
-    return Account.from_key(key)
+    account = Account.from_key(key)
+    want = expected_address()
+    if want and account.address != want:
+        raise RuntimeError(
+            f"Keystore holds {account.address}, not the expected fly wallet {want}"
+        )
+    return account
 
 
 def summary(path=None):
-    from .fees import DEV_SHARE_BPS, dev_wallet
+    from .fees import fee_wallet
 
     return {
         "keystore": str(keystore_dir(path)),
-        "trading": address("trading", path),
-        "fee": address("fee", path),
-        "development": dev_wallet(),
-        "dev_share_percent": DEV_SHARE_BPS / 100,
-        "treasury_share_percent": (10000 - DEV_SHARE_BPS) / 100,
+        "fly_wallet": address("trading", path),
+        "fly_wallet_expected": expected_address(),
+        "fee_wallet": fee_wallet(),
     }

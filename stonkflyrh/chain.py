@@ -152,6 +152,53 @@ ROUTER_ABI = [
     },
 ]
 
+CHAINLINK_ABI = [
+    {
+        "name": "latestRoundData",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [
+            {"name": "roundId", "type": "uint80"},
+            {"name": "answer", "type": "int256"},
+            {"name": "startedAt", "type": "uint256"},
+            {"name": "updatedAt", "type": "uint256"},
+            {"name": "answeredInRound", "type": "uint80"},
+        ],
+    },
+    {
+        "name": "decimals",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint8"}],
+    },
+    {
+        "name": "description",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "string"}],
+    },
+]
+
+OWNABLE_ABI = [
+    {
+        "name": "owner",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "address"}],
+    },
+    {
+        "name": "totalSupply",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+    },
+]
+
 FACTORY_ABI = [
     {
         "name": "getPool",
@@ -169,6 +216,11 @@ FACTORY_ABI = [
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
+# EIP-1967 implementation slot. A non-zero value means the contract behind an
+# address can be swapped out from under a holder.
+PROXY_SLOT = 0x360894A13BA1A3210667C828492DB98DCA3E2076CC3735A920A3CA505D382BBC
+
+
 @dataclass(frozen=True)
 class Network:
     key: str
@@ -178,6 +230,9 @@ class Network:
     explorer: str
     gas_symbol: str = "ETH"
     live_capable: bool = True
+    # This fork trades Robinhood Chain and nothing else; the flag exists so a
+    # configuration that is not Robinhood Chain is rejected rather than assumed.
+    robinhood: bool = True
 
     def tx_url(self, tx_hash):
         return f"{self.explorer.rstrip('/')}/tx/{tx_hash}"
@@ -285,6 +340,49 @@ class ChainClient:
 
     def balance(self, address):
         return int(self.w3.eth.get_balance(checksum(address)))
+
+    def code(self, address):
+        return bytes(self.w3.eth.get_code(checksum(address)))
+
+    def storage_at(self, address, slot):
+        return int.from_bytes(self.w3.eth.get_storage_at(checksum(address), slot), "big")
+
+    def is_upgradeable(self, address):
+        """EIP-1967 proxy check: a live implementation slot means upgradeable."""
+        try:
+            return self.storage_at(address, PROXY_SLOT) != 0
+        except Exception:
+            return False
+
+    def selectors(self, address):
+        """Four-byte selectors appearing as PUSH4 immediates in runtime code.
+
+        This is how a dispatcher compares calldata, so it finds functions a
+        verified ABI would list and functions a token author would rather not
+        advertise. It over-reports: a PUSH4 can be any constant. Treat a hit as
+        a reason to look, which is exactly how the screen uses it.
+        """
+        code = self.code(address)
+        found = set()
+        i = 0
+        while i < len(code):
+            op = code[i]
+            if op == 0x63 and i + 4 < len(code):  # PUSH4
+                found.add(code[i + 1 : i + 5].hex())
+                i += 5
+                continue
+            if 0x60 <= op <= 0x7F:  # any other PUSHn
+                i += op - 0x5F + 1
+                continue
+            i += 1
+        return found
+
+    def try_call(self, address, abi, function, *args):
+        """Read an optional interface. A contract without it is not an error."""
+        try:
+            return getattr(self.contract(address, abi).functions, function)(*args).call()
+        except Exception:
+            return None
 
     def nonce(self, address):
         # "pending" would let a stuck transaction silently shift the nonce of an

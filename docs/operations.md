@@ -37,25 +37,35 @@ address; they cannot tell you that a contract is the one you meant.
 
 ## Wallets
 
-`python -m stonkflyrh wallet create` generates two keys locally and writes them as
-Web3 Secret Storage keystores, chmod 0600, in `keystore/` (git-ignored):
+One key lives locally: the **fly wallet**, `0x68e82397455232f6F726E44ad1c980C6C99B3201`
+by default. It holds the run's WETH and gas ETH and signs every swap. You fund it and
+launch the coin from it, so the usual flow is `python -m stonkflyrh wallet import`,
+pasting its existing key. The key must derive the expected address or nothing is
+written; `STONKFLYRH_FLY_WALLET` changes what is expected. The keystore is Web3 Secret
+Storage, chmod 0600, in `keystore/` (git-ignored).
 
-- **trading** — holds the run's WETH and gas ETH, signs swaps and fee payouts;
-- **fee** — receives the 80% treasury share of protocol fees.
-
-The development wallet is not created here: it is your address, set as
-`STONKFLYRH_DEV_WALLET`, and this process only ever sends to it.
+The **fee wallet**, `0x7f5afC67d4C3AE0182354ea6e785FdEb20150f15` by default, needs no
+key: this process only ever sends to it.
 
 Back up the keystore directory and its password. There is no recovery path. Set
 `STONKFLYRH_KEYSTORE_PASSWORD` for unattended runs, understanding that it puts the
 password in the environment; leave it unset to be prompted.
 
+## Dollar limits
+
+`capital_usd`, `order_limit_usd`, `min_order_usd` and `loss_stop_usd` are converted to
+WETH at every observation from the ETH/USD reference the registry names: a Chainlink
+aggregator (`eth_usd_feed`, preferred) or a stablecoin pool (`stable`) priced through
+the same quoter the run trades with. A stale, non-positive or implausible price stops
+the run rather than resizing every order off it. Live preflight refuses a wallet funded
+past the dollar cap.
+
 ## Fees
 
-Every fill accrues a protocol fee in WETH, booked in the same transaction as the
-settlement, split 20% development / 80% treasury in integer wei with the remainder going
-to the treasury. Accrued fees stay in the trading wallet until swept, which is why the
-balance check expects cash *plus* unswept fees rather than cash alone.
+`protocol_fee_bps` defaults to 0: with both wallets yours, a fee would only move your
+own money and pay gas to do it. When set, every fill accrues the fee in WETH in the same
+transaction as the settlement, owed to the fee wallet. Accrued fees stay in the fly
+wallet until swept, which is why the balance check expects cash *plus* unswept fees.
 
 ```sh
 python -m stonkflyrh fees --out runs/live --dry-run   # what would be sent
@@ -68,12 +78,28 @@ re-sent blindly.
 
 ## Limits
 
-Defaults: 0.05 WETH capital, 0.005 WETH maximum order, 0.0005 WETH minimum order, 1%
-protocol fee, 1% slippage bound, 3% maximum round-trip pool cost, 24 orders/day, at least
-60 s between orders, gas capped at 5 gwei and at 25% of an order's notional.
+Defaults: $100 capital, $10 maximum order, $1 minimum order, 2% slippage bound, 6%
+maximum round-trip pool cost per token, 24 orders/day, at least 60 s between orders,
+gas capped at 5 gwei and at 25% of an order's notional.
 
-A 0.01 WETH drawdown halts new orders. **It does not liquidate holdings or cap further
-losses.** Holdings stay exposed to the market after a halt.
+Adaptation, on by default: order size shrinks linearly from the $10 cap toward 25% of it
+as realised volatility over the last 30 observations rises from 2% to 25% per
+observation, and buys stop above 25%; the cooldown triples after two consecutive
+aversive observations. Sells are never scaled or stopped by either. `--no-adapt` fixes
+both.
+
+A $25 drawdown halts new orders. **It does not liquidate holdings or cap further
+losses.** Holdings stay exposed to the market after a halt — including a rugged one;
+see [the rug screen](safety.md).
+
+## Posting to X
+
+Every post is written to `posts.jsonl` in the run directory first and shown on the
+site. Sending needs all of `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`,
+`X_ACCESS_SECRET` from an X developer app with write access, plus
+`STONKFLYRH_POST_TO_X=1`. Posts are at least 90 s apart and never repeated. A failed
+send is recorded by exception type only — the text could echo a signed header — and
+never interrupts trading.
 
 ## Stopping
 

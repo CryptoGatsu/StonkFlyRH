@@ -35,11 +35,22 @@ def read_meta(out):
     try:
         meta = {k: json.loads(v) for k, v in db.execute("SELECT key,value FROM meta")}
         fees = db.execute(
-            "SELECT COUNT(*),"
-            "COALESCE(SUM(CAST(gross_wei AS INTEGER)),0),"
-            "COALESCE(SUM(CAST(dev_wei AS INTEGER)),0),"
-            "COALESCE(SUM(CAST(treasury_wei AS INTEGER)),0) FROM fees"
+            "SELECT COUNT(*),COALESCE(SUM(CAST(gross_wei AS INTEGER)),0) FROM fees"
         ).fetchone()
+        blocklist = [
+            {"product": r[0], "at": r[1], "reason": r[2]}
+            for r in db.execute("SELECT product,at,reason FROM blocklist ORDER BY at DESC")
+        ]
+        rugs = [
+            json.loads(r[0])
+            for r in db.execute("SELECT record FROM rugs ORDER BY id DESC LIMIT 20")
+        ]
+        screens = {}
+        for product, verdict in db.execute("SELECT product,verdict FROM screens"):
+            try:
+                screens[product] = json.loads(verdict)
+            except json.JSONDecodeError:
+                continue
         payouts = [
             {
                 "created": r[0],
@@ -61,14 +72,11 @@ def read_meta(out):
     # The observation blob carries the full price history and is large; the
     # dashboard reads history from the trade rows instead.
     meta.pop("observation", None)
-    meta["fees"] = {
-        "fills_charged": int(fees[0]),
-        "gross_wei": str(int(fees[1])),
-        "dev_wei": str(int(fees[2])),
-        "treasury_wei": str(int(fees[3])),
-        "dev_share_percent": 20.0,
-    }
+    meta["fees"] = {"fills_charged": int(fees[0]), "gross_wei": str(int(fees[1]))}
     meta["payouts"] = payouts
+    meta["blocklist"] = blocklist
+    meta["rugs"] = rugs
+    meta["screens"] = screens
     return meta
 
 
@@ -99,7 +107,16 @@ def snapshot(out):
             full = json.loads(p.read_text())
             provenance = {
                 k: full.get(k)
-                for k in ["mode", "feed", "network", "wallets", "contracts", "settings"]
+                for k in [
+                    "mode",
+                    "feed",
+                    "network",
+                    "wallets",
+                    "usd_reference",
+                    "screen",
+                    "social",
+                    "settings",
+                ]
             }
         except json.JSONDecodeError:
             pass
@@ -151,6 +168,10 @@ class Handler(BaseHTTPRequestHandler):
             since = int((query.get("since") or ["0"])[0])
             rows = [r for r in read_trades(self.out) if int(r.get("tick", 0)) > since]
             return self._json({"trades": rows})
+        if route == "/api/posts":
+            from ..social import read_posts
+
+            return self._json({"posts": read_posts(self.out)})
         if route == "/api/stream":
             since = query.get("since")
             return self._stream(int(since[0]) if since else None)
@@ -201,6 +222,9 @@ class Handler(BaseHTTPRequestHandler):
                 if now - last_state > 5:
                     last_state = now
                     self._event("state", snapshot(self.out))
+                    from ..social import read_posts
+
+                    self._event("posts", {"posts": read_posts(self.out, limit=20)})
                 time.sleep(1)
         except (BrokenPipeError, ConnectionResetError):
             return

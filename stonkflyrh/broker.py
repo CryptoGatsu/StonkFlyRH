@@ -15,7 +15,7 @@ import os
 import time
 
 from .chain import ROUTER_ABI, checksum, hex32
-from .config import D, QUOTE_DECIMALS, to_wei
+from .config import D, QUOTE_DECIMALS, from_wei, to_wei
 from .fees import gross_fee_wei
 from .risk import Veto
 
@@ -36,12 +36,15 @@ class PaperBroker:
         self.l = ledger
         self.wallets = wallets or {}
 
-    def preflight(self):
+    def preflight(self, eth_usd=None):
+        from .fees import fee_wallet
+
         return {
             "mode": "paper",
             "network_execution": False,
             "network": self.s.network,
-            "fee_wallet": self.wallets.get("fee"),
+            "fly_wallet": self.wallets.get("trading"),
+            "fee_wallet": fee_wallet(),
         }
 
     def verify_balances(self):
@@ -91,7 +94,6 @@ class PaperBroker:
             "quote_wei": str(quote_wei),
             "fee_wei": str(fee_wei),
             "gas_wei": str(gas_wei),
-            "dev_fee_wei": str(gross_fee_wei(fee_wei, 2000)),
         }
 
 
@@ -116,20 +118,19 @@ class RobinhoodChainBroker:
     def from_env(cls, settings, ledger, client, registry, verified):
         if os.environ.get("STONKFLYRH_LIVE") != LIVE_OPT_IN:
             raise RuntimeError("Live opt-in missing")
-        from .fees import dev_wallet
-        from .wallet import address as wallet_address
+        from .fees import fee_wallet
         from .wallet import load
 
-        if not dev_wallet():
+        destination = fee_wallet()
+        if settings.protocol_fee_bps and not destination:
             raise RuntimeError(
-                "Set STONKFLYRH_DEV_WALLET before trading; the 20% development "
-                "share must have a destination before fees are collected"
+                "This run charges a protocol fee but STONKFLYRH_FEE_WALLET is unset; "
+                "the fee would have nowhere to go"
             )
-        fee_wallet = wallet_address("fee")
-        if not fee_wallet:
-            raise RuntimeError("No fee wallet. Run: python -m stonkflyrh wallet create")
         account = load("trading")
-        return cls(settings, ledger, client, registry, verified, account, fee_wallet)
+        return cls(
+            settings, ledger, client, registry, verified, account, destination or account.address
+        )
 
     # -- balances -------------------------------------------------------------
 
@@ -152,10 +153,8 @@ class RobinhoodChainBroker:
         }
 
     def unswept_fees(self):
-        """Fees booked but not yet paid out still sit in the trading wallet."""
-        return self.l.fees.outstanding("development") + self.l.fees.outstanding(
-            "treasury"
-        )
+        """Fees booked but not yet paid out still sit in the fly wallet."""
+        return self.l.fees.outstanding()
 
     def expected(self):
         held = self.l.positions
@@ -188,7 +187,7 @@ class RobinhoodChainBroker:
             if abs(got - want) > 1:
                 raise RuntimeError(f"{product} balance does not match the ledger")
 
-    def preflight(self):
+    def preflight(self, eth_usd=None):
         self.reconcile()
         gas = self.client.balance(self.address)
         quote = int(self.quote_token.functions.balanceOf(self.address).call())
@@ -210,11 +209,15 @@ class RobinhoodChainBroker:
                     raise RuntimeError(
                         "Start from a wallet holding only WETH and gas ETH"
                     )
-            cap = to_wei(self.s.capital, QUOTE_DECIMALS)
+            if eth_usd is None:
+                raise RuntimeError("Live preflight needs the ETH/USD reference")
+            from .pricing import usd_to_weth
+
+            cap = to_wei(usd_to_weth(self.s.capital_usd, eth_usd), QUOTE_DECIMALS)
             if not 0 < quote <= cap:
                 raise RuntimeError(
-                    f"Fund the trading wallet with 0 < WETH <= the configured "
-                    f"{self.s.capital} cap"
+                    f"Fund the fly wallet with 0 < WETH <= the configured "
+                    f"${self.s.capital_usd} cap (about {from_wei(cap, QUOTE_DECIMALS)} WETH)"
                 )
             with self.l.transaction():
                 held = D(quote) / (D(10) ** QUOTE_DECIMALS)
@@ -222,16 +225,13 @@ class RobinhoodChainBroker:
                     self.l.put(k, str(held))
                 self.l.put("live_initialized", True)
         self.verify_balances()
-        from .fees import DEV_SHARE_BPS, dev_wallet
-
         return {
             "mode": "live",
             "network": self.client.net.name,
             "chain_id": self.client.net.chain_id,
-            "trading_wallet": self.address,
+            "fly_wallet": self.address,
             "fee_wallet": self.fee_wallet,
-            "dev_wallet": dev_wallet(),
-            "dev_share_percent": DEV_SHARE_BPS / 100,
+            "protocol_fee_bps": self.s.protocol_fee_bps,
             "router": self.registry.router,
             "gas_wei": str(gas),
         }
@@ -380,9 +380,6 @@ class RobinhoodChainBroker:
             )
         self.l.settle(cid, base_wei, quote_wei, fee_wei, gas_wei, time.time())
         self.l.mark(cid, "SETTLED", receipt["tx_hash"])
-        from .fees import split_fee
-
-        dev_wei, treasury_wei = split_fee(fee_wei)
         return {
             "mode": "live",
             "status": "SETTLED",
@@ -392,8 +389,6 @@ class RobinhoodChainBroker:
             "base_wei": str(base_wei),
             "quote_wei": str(quote_wei),
             "fee_wei": str(fee_wei),
-            "dev_fee_wei": str(dev_wei),
-            "treasury_fee_wei": str(treasury_wei),
             "gas_wei": str(gas_wei),
         }
 

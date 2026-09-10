@@ -6,6 +6,10 @@
 - Paper execution is the default. Never send a real transaction while testing. Keys, keystores, the contract registry, balances, logs, checkpoints and data stay ignored.
 - No contract address is hardcoded. Every address the process will call is verified on chain at preflight: code present, router and quoter agreeing on a factory, token symbol and decimals matching, pool present at the fee tier.
 - Use integer wei for on-chain quantities and Decimal for ledger balances. Persist order intent, and record the signed transaction hash before broadcasting it. Unknown outcomes stop execution until reconciliation; never blindly resend a swap.
-- The 20% development fee share is a constant, split in integer wei with the remainder to the treasury. Settlement and fee accrual share one transaction. Never make the share configurable.
+- Limits are configured in dollars and converted every observation from the chain's ETH/USD reference; the ledger stays in WETH. A stale or implausible price stops the run.
+- The rug screen may only withhold a buy. It never proposes a trade, never picks a token, never overrides a HOLD, and never gates a sell. A screen that throws is a rejection.
+- A recorded rug adds to a permanent blocklist, lengthens the aversive pulse, and tightens screen thresholds. Describe the tightening as an engineered heuristic, never as the connectome learning.
+- Adaptation only removes options: size can shrink, buys can stop, cooldowns can stretch. Nothing adapts a position past the configured cap, and nothing adapts a sell.
+- Posting to X is off unless credentials and the opt-in are both present. Every post is drafted locally first. A send failure never interrupts trading and never surfaces exception text.
 - The website is read-only. It may not import the broker, open the keystore, hold a key, or expose a route that changes run state.
 - Keep README short. Detailed model and execution caveats belong in docs.

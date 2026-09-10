@@ -36,6 +36,21 @@ class Registry:
         self.quote_decimals = 18
         self.router = checksum(section["router"])
         self.quoter = checksum(section["quoter"])
+        # Optional: a Chainlink ETH/USD aggregator, or a stablecoin to price
+        # against through the quoter. One of them is needed for dollar limits.
+        self.eth_usd_feed = (
+            checksum(section["eth_usd_feed"]) if section.get("eth_usd_feed") else None
+        )
+        self.stable = None
+        if section.get("stable"):
+            stable = dict(section["stable"])
+            if not SYMBOL.match(stable.get("symbol", "")):
+                raise RuntimeError("Invalid stablecoin symbol in registry")
+            stable["address"] = checksum(stable["address"])
+            stable["decimals"] = int(stable["decimals"])
+            if not 0 < stable["decimals"] <= 36:
+                raise RuntimeError("Implausible stablecoin decimals")
+            self.stable = stable
         self.tokens = {}
         for symbol, info in (section.get("tokens") or {}).items():
             if not SYMBOL.match(symbol) or symbol == QUOTE_SYMBOL:
@@ -111,11 +126,29 @@ class Registry:
             if pool == ZERO_ADDRESS or not client.has_code(pool):
                 raise RuntimeError(f"No {symbol}/{QUOTE_SYMBOL} pool at fee tier {fee}")
             pools[symbol] = {"pool": pool, "fee": fee}
+        reference = None
+        if self.eth_usd_feed:
+            client.require_code(self.eth_usd_feed, "ETH/USD feed")
+            reference = {"kind": "chainlink", "address": self.eth_usd_feed}
+        elif self.stable:
+            identity = client.token_identity(self.stable["address"])
+            if (
+                identity["symbol"] != self.stable["symbol"]
+                or identity["decimals"] != self.stable["decimals"]
+            ):
+                raise RuntimeError("Registry stablecoin does not match the chain")
+            reference = {"kind": "stable-pool", **self.stable}
+        else:
+            raise RuntimeError(
+                "Registry needs 'eth_usd_feed' or 'stable': dollar limits cannot "
+                "be sized without an ETH/USD reference"
+            )
         return {
             "network": self.network_key,
             "router": self.router,
             "quoter": self.quoter,
             "factory": factory,
             "quote": quote,
+            "usd_reference": reference,
             "pools": pools,
         }

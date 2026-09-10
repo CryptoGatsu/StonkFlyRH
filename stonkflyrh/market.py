@@ -110,7 +110,8 @@ class RobinhoodChainMarket:
         self.history = {p: [] for p in self.products}
         self.seeded = {}
 
-    def _quote_call(self, token_in, token_out, amount_in, fee):
+    def quote_call(self, token_in, token_out, amount_in, fee):
+        """Public: the rug screen and the stablecoin oracle price through this."""
         params = (
             checksum(token_in),
             checksum(token_out),
@@ -151,7 +152,8 @@ class RobinhoodChainMarket:
             self.seeded[product] = "flat-from-first-observation"
             return [float(mid)] * self.HISTORY
 
-    def snapshot(self):
+    def snapshot(self, probe_weth):
+        """Price both legs at `probe_weth`, the size this run would trade."""
         result = {}
         now = time.time()
         for product in self.products:
@@ -159,15 +161,15 @@ class RobinhoodChainMarket:
             fee = self.registry.pool_fee(product, self.s.pool_fee_tier)
             base_decimals = entry["decimals"]
             quote_token = self.registry.quote_address
-            probe_quote_wei = to_wei(self.s.order_limit, QUOTE_DECIMALS)
+            probe_quote_wei = to_wei(probe_weth, QUOTE_DECIMALS)
             if probe_quote_wei <= 0:
                 raise RuntimeError("Order limit rounds to zero quote units")
             # Buy leg: what this run's own order size actually receives.
-            base_out = self._quote_call(
+            base_out = self.quote_call(
                 quote_token, entry["address"], probe_quote_wei, fee
             )
             # Sell leg: what that same quantity fetches back on the way out.
-            quote_back = self._quote_call(
+            quote_back = self.quote_call(
                 entry["address"], quote_token, base_out, fee
             )
             probe_base = from_wei(base_out, base_decimals)
@@ -201,6 +203,9 @@ class RobinhoodChainMarket:
             self.history[p].append(float(q.mid))
             self.history[p] = self.history[p][-self.HISTORY :]
 
+    def pool(self, product):
+        return self.verified["pools"][product]["pool"]
+
     def report(self):
         return {"feed": "robinhood-chain-quoter", "seed": dict(self.seeded)}
 
@@ -215,13 +220,25 @@ class FixtureMarket:
         self.products = settings.products
         self.tick = 0
         self.history = {p: [] for p in self.products}
+        self.registry = None
 
-    def snapshot(self):
+    def pool(self, product):
+        return None
+
+    def quote_call(self, *_args, **_kwargs):
+        raise RuntimeError("The fixture market does not price on chain")
+
+    def snapshot(self, probe_weth):
         quotes = {}
         now = time.time()
+        probe = D(probe_weth)
         for j, p in enumerate(self.products):
             base = D("0.0000001") * (D(10) ** (j % 3))
-            price = base * D(1 + 0.06 * math.sin(self.tick * 0.35 + j))
+            # A slow drift plus a faster wobble, so realised volatility is a
+            # real number the guard can adapt to rather than a constant.
+            drift = 1 + 0.06 * math.sin(self.tick * 0.35 + j)
+            wobble = 1 + 0.02 * math.sin(self.tick * 1.7 + j * 2)
+            price = base * D(str(drift * wobble))
             half = D(self.s.paper_pool_fee)
             quotes[p] = Quote(
                 p,
@@ -231,8 +248,8 @@ class FixtureMarket:
                 18,
                 QUOTE_DECIMALS,
                 int(self.s.pool_fee_tier),
-                D(self.s.order_limit),
-                D(self.s.order_limit) / (price * (1 + half)),
+                probe,
+                probe / (price * (1 + half)),
             )
             if not self.history[p]:
                 self.history[p] = [
