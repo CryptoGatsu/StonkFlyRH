@@ -12,6 +12,8 @@ contract nobody verified.
 """
 
 import os
+
+from .config import D
 from dataclasses import dataclass
 
 # eth_call selectors, kept explicit so the ABI surface this process can reach
@@ -335,8 +337,20 @@ class ChainClient:
             "decimals": int(c.functions.decimals().call()),
         }
 
+    # A legacy-priced transaction is refused if the block base fee has risen
+    # past its gas price between quoting and inclusion, and on this chain the
+    # base fee moves every block. Price a quarter above the higher of the
+    # node's suggestion and the latest base fee; an Arbitrum-style chain only
+    # ever charges the base fee, so the headroom costs nothing when unused.
+    GAS_PRICE_HEADROOM = D("1.25")
+
     def gas_price(self):
-        return int(self.w3.eth.gas_price)
+        suggested = int(self.w3.eth.gas_price)
+        try:
+            base = int(self.w3.eth.get_block("latest").get("baseFeePerGas") or 0)
+        except Exception:
+            base = 0
+        return int(D(max(suggested, base)) * self.GAS_PRICE_HEADROOM)
 
     def balance(self, address):
         return int(self.w3.eth.get_balance(checksum(address)))

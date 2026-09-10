@@ -60,3 +60,22 @@ def test_the_chunk_halves_when_the_node_caps_the_range():
     assert hi == 1000
     assert all(b - a + 1 <= 500 for a, b in eth.calls if (a, b) not in [(1, 2000), (1, 1000)])
     assert len(out) == 2
+
+
+def test_gas_price_clears_the_current_base_fee_with_headroom():
+    """The node refused a transaction priced at its own suggestion because the
+    base fee ticked above it a block later."""
+    from stonkflyrh.chain import ChainClient
+
+    c = ChainClient.__new__(ChainClient)
+    c.w3 = type("W3", (), {})()
+    c.w3.eth = type("Eth", (), {
+        "gas_price": 127_364_000,
+        "get_block": staticmethod(lambda tag: {"baseFeePerGas": 127_948_000}),
+    })()
+    assert c.gas_price() == int(127_948_000 * 1.25)
+    c.w3.eth = type("Eth", (), {
+        "gas_price": 200_000_000,
+        "get_block": staticmethod(lambda tag: {}),      # a node without base fees
+    })()
+    assert c.gas_price() == 250_000_000
