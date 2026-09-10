@@ -472,6 +472,9 @@ def cmd_discovery(a):
         "universe": list((meta.get("universe") or {}).keys()),
         "bridges": {k: v.get("symbol") for k, v in (meta.get("bridges") or {}).items()},
         "candidates_pending": len(meta.get("pending_candidates") or []),
+        "candidates_waiting_for_liquidity": sum(
+            1 for c in (meta.get("pending_candidates") or []) if c.get("not_before")
+        ),
         "candidates_screened": candidates,
         "candidate_outcomes": dict(sorted(outcomes.items(), key=lambda kv: -kv[1])[:12]),
         "screen_checks_failed": failed,
@@ -482,7 +485,8 @@ def cmd_discovery(a):
         ],
         "recent_scans": [
             {k: v for k, v in sc.items() if k in ("from_block", "to_block", "candidates", "skipped", "backlog_blocks")}
-            | {"added": len(sc.get("added", [])), "rejected": len(sc.get("rejected", []))}
+            | {"added": len(sc.get("added", [])), "rejected": len(sc.get("rejected", [])),
+               "retried": len(sc.get("retried", []))}
             for sc in scans
         ],
         "last_rejections": [r.get("reason", "")[:140] for sc in scans[:2] for r in sc.get("rejected", [])[:6]],

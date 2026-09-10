@@ -494,14 +494,14 @@ def test_a_tuned_setting_is_recorded_not_refused(tmp_path):
     live run must carry on and keep a record of what changed."""
     ledger = Ledger(tmp_path / "l.sqlite", Settings(), "paper", CAPITAL)
     ledger.close()
-    tuned = Settings(order_limit_usd="5", min_liquidity_usd="5000")
+    tuned = Settings(order_limit_usd="5", min_liquidity_usd="2500")
     reopened = Ledger(tmp_path / "l.sqlite", tuned, "paper")
     try:
         assert reopened.get("settings") == tuned.signature()
         assert reopened.get("settings_full")["order_limit_usd"] == "5"
         changed = reopened.events("migration")[0]["settings_changed"]
         assert changed["order_limit_usd"] == ["10", "5"]
-        assert changed["min_liquidity_usd"] == ["8000", "5000"]
+        assert changed["min_liquidity_usd"] == ["4000", "2500"]
     finally:
         reopened.close()
 

@@ -234,3 +234,155 @@ def test_a_young_v4_pool_is_withheld(tmp_path):
         assert report["added"] == [] and "pool_age" in report["rejected"][0]["reason"]
     finally:
         ledger.close()
+
+
+# -- pool state: empty pools wait, depth comes from liquidity, bridges are probed
+
+
+class StateVenue(Venue):
+    """A venue that also answers StateView questions. `pools` maps a pool id to
+    (liquidity, sqrtPriceX96); anything else has no liquidity."""
+
+    def __init__(self, chain, pools):
+        super().__init__(chain)
+        self.pools = pools
+        self.probed = []
+
+    def liquidity(self, key):
+        self.probed.append(key)
+        return self.pools.get(v4.pool_id(key), (0, 0))[0]
+
+    def slot0(self, key):
+        liquidity, sqrt_p = self.pools.get(v4.pool_id(key), (0, 0))
+        return {"sqrtPriceX96": sqrt_p, "tick": 0, "protocolFee": 0, "lpFee": 30000}
+
+    def quote_path(self, keys, currency_in, amount_in):
+        return amount_in  # one unit of any bridge asset is worth one USDG here
+
+
+def build_state(tmp_path, logs, identities, pools, **overrides):
+    ledger, registry, market, disc = build(tmp_path, logs, identities, **overrides)
+    venue = StateVenue(disc.client, pools)
+    market.venue = venue
+    disc.venue = venue
+    return ledger, registry, market, disc, venue
+
+
+def coin_key():
+    c0, c1 = sorted_pair(USDG, COIN)
+    return v4.pool_key(c0, c1, 30000, 60, PONS_HOOK)
+
+
+def test_an_empty_pool_is_looked_at_again_not_rejected(tmp_path):
+    """Pons initialises the pool at token creation and fills it at graduation."""
+    logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
+    ledger, registry, market, disc, venue = build_state(tmp_path, logs, {COIN: ("WOOF", 18)}, {})
+    try:
+        now = time.time()
+        report = disc.scan(now, ETH_USD)
+        assert report["added"] == [] and report["rejected"] == []
+        assert [r["symbol"] for r in report["retried"]] == ["WOOF"]
+        assert "no liquidity yet" in report["retried"][0]["reason"]
+        assert COIN not in ledger.seen_candidates()             # not remembered as rejected
+        pending = ledger.get("pending_candidates")
+        assert len(pending) == 1 and pending[0]["not_before"] > now
+        # Too soon: it waits. Then the pool fills and it is admitted.
+        assert disc.scan(now + 60, ETH_USD)["waiting_for_liquidity"] == 1
+        venue.pools[v4.pool_id(coin_key())] = (10**20, 2**96)
+        report = disc.scan(now + 2000, ETH_USD)
+        assert [a["symbol"] for a in report["added"]] == ["WOOF"]
+        assert ledger.get("pending_candidates") == []
+    finally:
+        ledger.close()
+
+
+def test_a_pool_that_never_fills_is_given_up_on(tmp_path):
+    logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
+    ledger, _, _, disc, _ = build_state(tmp_path, logs, {COIN: ("WOOF", 18)}, {})
+    try:
+        now = time.time()
+        for i in range(PoolDiscovery.MAX_EMPTY_POOL_RETRIES + 1):
+            report = disc.scan(now + i * 2000, ETH_USD)
+        assert report["rejected"][0]["reason"] == "pool never received liquidity"
+        assert COIN in ledger.seen_candidates()
+    finally:
+        ledger.close()
+
+
+def test_v4_depth_is_read_from_pool_liquidity(tmp_path):
+    """A pool with USDG as currency1 at price 1: reserve1 = L * sqrtP / 2^96."""
+    logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
+    # 3000 USDG (6 decimals) of virtual reserve on the quote side -> ~$6000 depth
+    pools = {v4.pool_id(coin_key()): (3000 * 10**QD, 2**96)}
+    ledger, _, _, disc, _ = build_state(tmp_path, logs, {COIN: ("WOOF", 18)}, pools,
+                                        min_liquidity_usd="7000")
+    try:
+        report = disc.scan(time.time(), ETH_USD)
+        reason = report["rejected"][0]["reason"]
+        assert "liquidity" in reason and "from pool liquidity" in reason
+        assert "$6000" in reason
+        # Lower the floor below the read depth and the same pool clears.
+        disc.s = disc.screen.s = Settings(products=(), discover_v3=False, min_liquidity_usd="5000")
+        ledger.put("discovery_block", 4000)
+        ledger.db.execute("DELETE FROM candidates")
+        report = disc.scan(time.time() + 700, ETH_USD)
+        assert [a["symbol"] for a in report["added"]] == ["WOOF"]
+    finally:
+        ledger.close()
+
+
+def test_the_registry_keeps_the_block_a_pool_was_created_in(tmp_path):
+    logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
+    ledger, registry, _, disc = build(tmp_path, logs, {COIN: ("WOOF", 18)})
+    try:
+        disc.scan(time.time(), ETH_USD)
+        assert registry.token("WOOF")["discovered_block"] == 4900
+        assert registry.token("WOOF")["hooks"] == PONS_HOOK
+    finally:
+        ledger.close()
+
+
+def test_the_eth_bridge_is_probed_from_pool_state_on_start(tmp_path):
+    """No USDG/ETH Initialize log in range, but the pool exists: found anyway."""
+    c0, c1 = sorted_pair(v4.NATIVE, USDG)
+    eth_pool = v4.pool_key(c0, c1, 500, 10, NOHOOK)
+    shallow = v4.pool_key(c0, c1, 3000, 60, NOHOOK)
+    pools = {v4.pool_id(eth_pool): (10**24, 2**96), v4.pool_id(shallow): (10**20, 2**96)}
+    logs = [init_log(v4.NATIVE, COIN, 30000, 60, PONS_HOOK, 4900)]
+    ledger, _, _, disc, venue = build_state(tmp_path, logs, {COIN: ("WOOF", 18)}, pools)
+    try:
+        disc._seed_bridges()
+        bridge = disc.bridges()[v4.NATIVE]
+        assert bridge["symbol"] == "ETH" and bridge["source"] == "probed"
+        assert bridge["route"][0]["fee"] == 500                 # the deeper of the two
+        venue.pools[v4.pool_id(v4.pool_key(*sorted_pair(v4.NATIVE, COIN), 30000, 60, PONS_HOOK))] = (10**22, 2**96)
+        report = disc.scan(time.time(), ETH_USD)
+        assert [a["symbol"] for a in report["added"]] == ["WOOF"]
+        assert len(ledger.universe()["WOOF"]["route"]) == 2 and ledger.universe()["WOOF"]["via"] == "ETH"
+    finally:
+        ledger.close()
+
+
+def test_an_unknown_pair_asset_is_probed_for_a_bridge_once_in_a_while(tmp_path):
+    c0, c1 = sorted_pair(GOOGL, USDG)
+    googl_pool = v4.pool_key(c0, c1, 500, 10, NOHOOK)
+    logs = [init_log(GOOGL, COIN, 30000, 60, PONS_HOOK, 4900)]
+    ledger, _, _, disc, venue = build_state(tmp_path, logs, {COIN: ("WOOF", 18)}, {})
+    try:
+        report = disc.scan(time.time(), ETH_USD)
+        assert report["added"] == [] and len(ledger.get("unrouted_v4")) == 1
+        assert GOOGL in ledger.get("bridge_probes")                 # asked, nothing there
+        asked = len(venue.probed)
+        ledger.put("discovery_block", 4000)
+        disc.scan(time.time() + 61, ETH_USD)
+        assert len(venue.probed) == asked                           # not asked again so soon
+        # The pool appears and the probe window passes: routed through GOOGL.
+        venue.pools[v4.pool_id(googl_pool)] = (10**24, 2**96)
+        venue.pools[v4.pool_id(v4.pool_key(*sorted_pair(GOOGL, COIN), 30000, 60, PONS_HOOK))] = (10**22, 2**96)
+        ledger.put("bridge_probes", {})
+        ledger.put("discovery_block", 4000)
+        report = disc.scan(time.time() + 122, ETH_USD)
+        assert [a["symbol"] for a in report["added"]] == ["WOOF"]
+        assert ledger.universe()["WOOF"]["via"] == GOOGL[:8]
+    finally:
+        ledger.close()

@@ -17,8 +17,10 @@ reputation service, no allowlist, no score from anywhere else.
 | `upgradeable` | EIP-1967 implementation slot | non-zero: the contract behind the address can be swapped |
 | `owner_levers` | PUSH4 immediates in the runtime bytecode | a `mint`, `blacklist`/`pause`/trading toggle, or fee-setter selector is present |
 | `ownership` | `owner()` if the token has one | not the zero address |
-| `liquidity` | USDG balance of the pool × 2 | below the floor (default $25,000) |
-| `pool_history` | `slot0().observationCardinality` | fewer than 4 oracle observations — the pool is brand new |
+| `liquidity` | v3: USDG balance of the pool × 2; v4: the pool's liquidity and price from the StateView, valued in USDG (through the bridge for an ETH- or GOOGL-paired pool), else depth inferred from price impact net of the pool fee | below the floor (default $4,000) |
+| `pool_history` | v3: `slot0().observationCardinality` | fewer than 4 oracle observations — the pool is brand new |
+| `pool_age` | v4: seconds since the block the pool was initialised in | younger than 30 minutes |
+| `pool_empty` | v4: liquidity is zero | the pool exists but has no liquidity yet (a Pons token before graduation): not a rejection — the candidate is screened again every 30 minutes for a day |
 | `sellable` | quoter, token → USDG | the sell leg returns nothing: a honeypot |
 | `transfer_tax` | round trip of a tiny probe, minus twice the pool fee, halved | above the ceiling (default 5% per side) |
 | `price_impact` | round trip at the run's order size minus the tiny probe's | above the ceiling (default 3%) |

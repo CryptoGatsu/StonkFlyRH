@@ -79,7 +79,7 @@ class Settings:
 
     # -- rug screen ---------------------------------------------------------
     screen_enabled: bool = True
-    min_liquidity_usd: str = "8000"
+    min_liquidity_usd: str = "4000"
     max_transfer_tax: str = "0.05"
     max_price_impact: str = "0.03"
     min_pool_observations: int = 4

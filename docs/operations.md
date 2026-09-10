@@ -171,8 +171,15 @@ worker also reads the PoolManager's `Initialize` events. A v4 pool is admitted w
 hook is on `hooks_allow` in the registry (the Pons hook is pre-filled; hookless pools
 are always allowed) and USDG can reach its token: directly, or through a **bridge** — a
 USDG pool for the pair asset. Bridges come from the registry (`v4.bridges`, e.g. a
-GOOGL/USDG PoolKey) and from hookless standard-fee USDG pools seen on chain. A launch
-paired with an asset that has no bridge yet waits, and is routed the moment one appears.
+GOOGL/USDG PoolKey), from hookless standard-fee USDG pools seen on chain, and from the
+StateView directly: on start the worker asks for USDG/ETH and USDG/WETH pools at the
+standard tiers, and when a launch pairs with an asset it does not know (GOOGL, say) it
+asks for a USDG pool of that asset too, at most once per 20,000 blocks. A launch paired
+with an asset that has no bridge yet waits, and is routed the moment one appears.
+
+Pons initialises a token's v4 pool when the token is created and adds the liquidity at
+graduation. A candidate whose pool is empty is not rejected: it goes back in the queue
+and is screened again every `min_pool_age_seconds` for up to 48 tries.
 Native-ETH pairs route through the USDG/ETH pool once it has been seen. Trades on v4 go through the Universal
 Router via Permit2, single-hop or multi-hop in one transaction; the screen infers depth
 from price impact and checks pool age instead of v3's oracle history.

@@ -106,6 +106,10 @@ class Registry:
             "pool_fee": int(entry["pool_fee"]),
             "venue": entry.get("venue", "v3"),
             "route": entry.get("route"),
+            "pool": entry.get("pool"),
+            "hooks": entry.get("hooks"),
+            "via": entry.get("via"),
+            "discovered_block": entry.get("discovered_block"),
         }
 
     def remove_token(self, symbol):

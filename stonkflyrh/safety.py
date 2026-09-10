@@ -126,6 +126,13 @@ class Verdict:
     def approved(self):
         return self.error is None and all(c.passed for c in self.checks)
 
+    @property
+    def retry(self):
+        """Withheld for a reason that time fixes (an empty pool awaiting its
+        liquidity), so the candidate should be looked at again, not remembered
+        as rejected."""
+        return any(c.name == "pool_empty" and not c.passed for c in self.checks)
+
     def failures(self):
         return [c for c in self.checks if not c.passed]
 
@@ -295,7 +302,7 @@ class RugScreen:
 
     def _pool(self, product, entry, pool, eth_usd):
         if self._venue(product) == "v4":
-            return self._pool_v4(product, entry, pool)
+            return self._pool_v4(product, entry, pool, eth_usd)
         checks = []
         pool = checksum(pool)
         quote_token = self.registry.quote_address
@@ -334,9 +341,10 @@ class RugScreen:
         checks += self._probes(product, entry, quote_token, fee, decimals, qd)
         return checks
 
-    def _pool_v4(self, product, entry, pool):
-        """v4 pools live inside one singleton and carry no oracle, so depth is
-        inferred from the probes and age from the block the pool was created."""
+    def _pool_v4(self, product, entry, pool, eth_usd=None):
+        """v4 pools live inside one singleton and carry no oracle. Depth is read
+        from the pool's liquidity when the venue exposes it, else inferred from
+        the probes; age comes from the block the pool was initialised in."""
         checks = []
         quote_token = self.registry.quote_address
         fee = int(entry.get("pool_fee") or self.s.pool_fee_tier)
@@ -353,38 +361,131 @@ class RugScreen:
                 age,
             )
         )
+        state = self._v4_state(entry, eth_usd)
+        if state is not None and state["liquidity"] == 0:
+            # Pons initialises the pool when the token is created and adds the
+            # liquidity when it graduates. Nothing to probe yet; look again later.
+            checks.append(
+                Check("pool_empty", False, "pool holds no liquidity yet; screened again later", "0")
+            )
+            return checks
         probes = self._probes(product, entry, quote_token, fee, decimals, qd)
         impact = next((c for c in probes if c.name == "price_impact"), None)
-        if impact is not None and impact.value is not None and D(impact.value) > 0:
+        floor = self.min_liquidity_usd()
+        if state is not None and state.get("depth_usd") is not None:
+            depth = state["depth_usd"]
+            how = "from pool liquidity"
+        elif impact is not None and impact.value is not None:
             # A route that moves the price by x% for an order of N dollars has
             # about N/x dollars of effective depth on the way in; both sides
-            # together is roughly twice that.
-            depth = D(self.s.order_limit_usd) / D(impact.value) * 2
-        elif impact is not None and impact.value is not None:
-            depth = D(self.s.order_limit_usd) * 2000  # no measurable impact at this size
+            # together is roughly twice that. The pool's own fee is not impact.
+            lp_fee = D(state["lpFee"]) / D(1000000) if state and state.get("lpFee") is not None else D(0)
+            net = D(impact.value) - lp_fee
+            if net > D("0.0001"):
+                depth = D(self.s.order_limit_usd) / net * 2
+            else:
+                depth = D(self.s.order_limit_usd) * 2000  # no measurable impact at this size
+            how = "inferred from price impact"
         else:
             depth = D(0)
-        floor = self.min_liquidity_usd()
+            how = "unknown: the route did not quote"
         checks.append(
             Check(
                 "liquidity",
                 depth >= floor,
-                f"route depth about ${depth:.0f} inferred from price impact, floor ${floor:.0f}",
+                f"route depth about ${depth:.0f} {how}, floor ${floor:.0f}",
                 str(depth),
             )
         )
         return checks + probes
+
+    def _v4_state(self, entry, eth_usd):
+        """Liquidity, current fee and dollar depth of the token's own pool, from
+        the StateView. None when the venue cannot say."""
+        venue = getattr(self.market, "venue", None)
+        route = entry.get("route") or []
+        if venue is None or not route or not hasattr(venue, "liquidity"):
+            return None
+        key = route[-1]
+        try:
+            liquidity = int(venue.liquidity(key))
+            slot0 = venue.slot0(key)
+        except Exception:
+            return None
+        state = {"liquidity": liquidity, "lpFee": slot0.get("lpFee"), "depth_usd": None}
+        if liquidity == 0 or not slot0.get("sqrtPriceX96"):
+            return state
+        token = checksum(entry["address"])
+        other = key["currency1"] if checksum(key["currency0"]) == token else key["currency0"]
+        sqrt_p = int(slot0["sqrtPriceX96"])
+        # Virtual reserves of a full-range position; concentrated liquidity
+        # makes this an over-estimate near the price and the floor is a floor.
+        if checksum(other) == checksum(key["currency1"]):
+            reserve = liquidity * sqrt_p // 2**96
+        else:
+            reserve = liquidity * 2**96 // sqrt_p
+        try:
+            usd = self._currency_usd(other, reserve, eth_usd)
+        except Exception:
+            usd = None
+        if usd is not None:
+            state["depth_usd"] = usd * 2
+        return state
+
+    def _currency_usd(self, currency, amount_wei, eth_usd):
+        """Dollar value of `amount_wei` of a v4 currency: USDG, ETH/WETH, or a
+        bridge asset priced through its USDG pool."""
+        from . import v4 as v4mod
+
+        currency = checksum(currency)
+        qd = self.registry.quote_decimals
+        if currency == self.registry.quote_address:
+            return from_wei(amount_wei, qd)
+        if currency in (v4mod.NATIVE, self.registry.weth):
+            if eth_usd is None:
+                return None
+            return from_wei(amount_wei, 18) * D(eth_usd)
+        bridge = (self.l.get("bridges") or {}).get(currency)
+        if not bridge:
+            return None
+        venue = self.market.venue
+        decimals = int(self.client.token_identity(currency)["decimals"])
+        unit = 10**decimals
+        out = venue.quote_path(bridge["route"], currency, unit)
+        return from_wei(int(out), qd) * D(amount_wei) / D(unit)
 
     def _pool_age(self, entry):
         block = entry.get("discovered_block") or entry.get("initialized_block")
         if not block:
             return None
         try:
+            latest = self.client.w3.eth.get_block("latest")
             created = int(self.client.w3.eth.get_block(int(block))["timestamp"])
-            latest = int(self.client.w3.eth.get_block("latest")["timestamp"])
-            return float(latest - created)
+            return float(int(latest["timestamp"]) - created)
+        except Exception:
+            pass
+        # The public RPC turned a block lookup down: fall back to the block
+        # distance at the chain's observed pace.
+        try:
+            head = int(self.client.w3.eth.block_number)
         except Exception:
             return None
+        return float(max(0, head - int(block)) * self._seconds_per_block())
+
+    SECONDS_PER_BLOCK_FALLBACK = 0.25
+
+    def _seconds_per_block(self):
+        cached = getattr(self, "_spb", None)
+        if cached:
+            return cached
+        try:
+            latest = self.client.w3.eth.get_block("latest")
+            earlier = self.client.w3.eth.get_block(int(latest["number"]) - 5000)
+            spb = (int(latest["timestamp"]) - int(earlier["timestamp"])) / 5000
+            self._spb = spb if spb > 0 else self.SECONDS_PER_BLOCK_FALLBACK
+        except Exception:
+            self._spb = self.SECONDS_PER_BLOCK_FALLBACK
+        return self._spb
 
     def _probes(self, product, entry, quote_token, fee, decimals, qd):
         checks = []

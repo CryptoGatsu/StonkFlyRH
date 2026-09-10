@@ -90,6 +90,9 @@ class PoolDiscovery:
     # Progress is written to the ledger after every window, so a rate-limit
     # error part-way through a scan costs at most one window, not the scan.
     WINDOW = 6000
+    # A pool initialised without liquidity is looked at again this many times,
+    # min_pool_age_seconds apart, before the token is given up on.
+    MAX_EMPTY_POOL_RETRIES = 48
 
     def __init__(self, settings, client, registry, ledger, market, screen, factory, venue=None):
         self.s = settings
@@ -128,6 +131,57 @@ class PoolDiscovery:
             bridges[other] = {"symbol": b.get("symbol", other[:8]), "route": [key], "source": "registry"}
         if bridges:
             self.l.put("bridges", bridges)
+        # The USDG/ETH and USDG/WETH pools are older than any lookback; ask the
+        # StateView for them directly rather than wait for their logs.
+        for currency, symbol in ((v4mod.NATIVE, "ETH"), (self.registry.weth, "WETH")):
+            if currency and currency not in self.bridges():
+                self._probe_bridge(currency, symbol)
+
+    # Standard hookless (fee, tickSpacing) tiers a plain USDG pool would use.
+    BRIDGE_TIERS = ((100, 1), (500, 10), (3000, 60))
+    BRIDGE_REPROBE_BLOCKS = 20000
+
+    def _probe_bridge(self, currency, symbol=None):
+        """Look for a hookless USDG pool for `currency` at a standard tier by
+        reading pool state, and learn the deepest one as a bridge. Negative
+        results are remembered for a while so a scan does not re-ask."""
+        if self.venue is None or not hasattr(self.venue, "liquidity"):
+            return None
+        currency = checksum(currency)
+        quote = self.registry.quote_address
+        if currency == quote or currency in self.bridges():
+            return self.bridges().get(currency)
+        probes = dict(self.l.get("bridge_probes") or {})
+        try:
+            head = int(self.client.w3.eth.block_number)
+        except Exception:
+            head = 0
+        last = probes.get(currency)
+        if last is not None and head - int(last) < self.BRIDGE_REPROBE_BLOCKS:
+            return None
+        best = None
+        for fee, spacing in self.BRIDGE_TIERS:
+            a, b = sorted((currency, quote), key=lambda x: int(x, 16))
+            key = v4mod.pool_key(a, b, fee, spacing, v4mod.NATIVE)
+            try:
+                liquidity = int(self.venue.liquidity(key))
+            except Exception:
+                continue
+            if liquidity > 0 and (best is None or liquidity > best[0]):
+                best = (liquidity, key)
+        probes[currency] = head
+        self.l.put("bridge_probes", probes)
+        if best is None:
+            return None
+        bridges = self.bridges()
+        bridges[currency] = {
+            "symbol": symbol or ("ETH" if currency == v4mod.NATIVE else currency[:8]),
+            "route": [best[1]],
+            "source": "probed",
+            "block": head,
+        }
+        self.l.put("bridges", bridges)
+        return bridges[currency]
 
     def bridges(self):
         return self.l.get("bridges") or {}
@@ -281,10 +335,15 @@ class PoolDiscovery:
         universe = self.l.universe()
         room = max(0, int(self.s.max_products) - len(universe))
         coin = checksum(self.s.coin_address) if self.s.coin_address else None
+        # Candidates waiting for their pool to fill are not due yet.
+        ready = [c for c in pending if c.get("not_before", 0) <= now]
+        waiting = [c for c in pending if c.get("not_before", 0) > now]
+        report["waiting_for_liquidity"] = len(waiting)
         # The operator's own coin is looked at first and is not subject to the
         # cap; otherwise the newest launch first.
-        pending.sort(key=lambda c: (0 if c["token"] == coin else 1, -c["block"]))
-        batch, rest = pending[: int(self.s.discovery_batch)], pending[int(self.s.discovery_batch):]
+        ready.sort(key=lambda c: (0 if c["token"] == coin else 1, -c["block"]))
+        batch, rest = ready[: int(self.s.discovery_batch)], ready[int(self.s.discovery_batch):]
+        retried = []
         for i, c in enumerate(batch):
             if room <= 0 and c["token"] != coin:
                 report["rejected"].append({"address": c["token"], "reason": "universe full"})
@@ -297,9 +356,18 @@ class PoolDiscovery:
                     if c["token"] != coin:
                         room -= 1
                     report["added"].append(outcome)
+                elif outcome.get("retry"):
+                    tries = int(c.get("retries", 0)) + 1
+                    if tries <= self.MAX_EMPTY_POOL_RETRIES:
+                        retried.append({**c, "retries": tries,
+                                        "not_before": now + float(self.s.min_pool_age_seconds)})
+                        report.setdefault("retried", []).append(outcome)
+                    else:
+                        self.l.mark_candidate(c["token"], "pool never received liquidity", now)
+                        report["rejected"].append({**outcome, "reason": "pool never received liquidity"})
                 else:
                     report["rejected"].append(outcome)
-            self.l.put("pending_candidates", batch[i + 1:] + rest)
+            self.l.put("pending_candidates", (batch[i + 1:] + rest + waiting + retried)[-500:])
 
     def due(self, now):
         # With a backlog still to cover, or candidates still queued, scan again
@@ -337,6 +405,11 @@ class PoolDiscovery:
                 route = [dict(k) for k in bridges[side]["route"]] + [key]
                 return {**created, "token": other, "venue": "v4", "route": route,
                         "pool": v4mod.pool_id(key), "via": bridges[side].get("symbol")}
+        # Neither side is known. One of them may have a plain USDG pool that
+        # predates the scan (GOOGL, say): ask for it once in a while.
+        for side in (c0, c1):
+            if side not in bridges and self._probe_bridge(side):
+                return self._route_v4(created, quote)
         return None
 
     def _consider(self, created, now, eth_usd):
@@ -372,6 +445,10 @@ class PoolDiscovery:
         if not verdict.approved:
             self.registry.remove_token(symbol)
             self.market.remove_product(symbol)
+            if verdict.retry:
+                # Not a judgement on the token: the pool has no liquidity yet.
+                return {"address": address, "symbol": symbol, "added": False,
+                        "reason": verdict.reason(), "retry": True}
             self.l.mark_candidate(address, verdict.reason(), now)
             return {
                 "address": address,
