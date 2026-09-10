@@ -28,7 +28,7 @@ command as root:
 curl -fsSL https://raw.githubusercontent.com/CryptoGatsu/StonkFlyRH/main/deploy/install.sh | sudo bash
 ```
 
-It installs Python 3.11 and a compiler, creates the `stonkfly` user, clones to
+It installs Python (whatever 3.11+ the OS ships) and a compiler, creates the `stonkfly` user, clones to
 `/opt/stonkflyrh`, builds the venv, copies `.env.example` → `.env` and
 `tokens.example.json` → `tokens.json`, installs both systemd units, starts the
 site, and runs the tests. Read the script first; it is short.

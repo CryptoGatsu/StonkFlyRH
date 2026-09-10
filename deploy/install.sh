@@ -9,8 +9,26 @@ BRANCH="${STONKFLYRH_BRANCH:-main}"
 HOME_DIR=/opt/stonkflyrh
 
 echo "==> packages"
+export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3.11 python3.11-venv python3.11-dev build-essential git nginx >/dev/null
+apt-get install -y -qq build-essential git nginx curl >/dev/null
+# Any Python 3.11+ the OS ships (24.04 has 3.12); fall back to deadsnakes 3.11.
+PY=""
+for candidate in python3.13 python3.12 python3.11 python3; do
+  if command -v "$candidate" >/dev/null 2>&1 \
+     && "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'; then
+    PY="$candidate"; break
+  fi
+done
+if [ -z "$PY" ]; then
+  apt-get install -y -qq software-properties-common >/dev/null
+  add-apt-repository -y ppa:deadsnakes/ppa >/dev/null
+  apt-get update -qq
+  PY=python3.11
+fi
+PKG="$PY"; [ "$PY" = python3 ] && PKG=python3
+apt-get install -y -qq "${PKG}" "${PKG}-venv" "${PKG}-dev" >/dev/null
+echo "    using $("$PY" --version)"
 
 echo "==> swap"
 # The connectome's build step spikes above 8 GB. A machine under 12 GB gets an
@@ -33,7 +51,7 @@ fi
 cd "$HOME_DIR"
 
 echo "==> python"
-[ -d .venv ] || sudo -u stonkfly python3.11 -m venv .venv
+[ -d .venv ] || sudo -u stonkfly "$PY" -m venv .venv
 sudo -u stonkfly .venv/bin/pip install -q --upgrade pip
 sudo -u stonkfly .venv/bin/pip install -q -e '.[test]'
 

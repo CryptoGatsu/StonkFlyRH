@@ -88,7 +88,7 @@ allowed through the drained pool's wide spread. [Details and limits](docs/safety
 
 ## Run it
 
-Python 3.11, a C++17 compiler, macOS/Linux. Allow several GB for the dataset and
+Python 3.11 or newer, a C++17 compiler, macOS/Linux. Allow several GB for the dataset and
 dependencies; 16 GB RAM recommended, 8 GB with swap works.
 
 ```sh
