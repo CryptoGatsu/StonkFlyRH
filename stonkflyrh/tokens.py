@@ -10,7 +10,6 @@ that does not survive those checks stops the run before any order exists.
 
 import json
 import os
-from pathlib import Path
 
 from .chain import FACTORY_ABI, QUOTER_ABI, ROUTER_ABI, ZERO_ADDRESS, checksum
 from .config import SYMBOL
@@ -20,7 +19,9 @@ DEFAULT_REGISTRY = "tokens.json"
 
 
 def registry_path(path=None):
-    return Path(path or os.environ.get(REGISTRY_ENV) or DEFAULT_REGISTRY).resolve()
+    from .paths import resolve
+
+    return resolve(path or os.environ.get(REGISTRY_ENV) or DEFAULT_REGISTRY)
 
 
 class Registry:

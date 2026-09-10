@@ -1170,8 +1170,13 @@ def main():
     a = parser.parse_args()
     from dotenv import load_dotenv
 
-    # Never search parent projects for unrelated credentials.
-    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
+    from .paths import env_file, resolve
+
+    # The current directory's .env, else the install's own; never a search up
+    # through parent directories for unrelated credentials.
+    load_dotenv(dotenv_path=env_file(), override=False)
+    if getattr(a, "out", None) is not None:
+        a.out = resolve(a.out)
     if a.command in ("prepare", "verify"):
         from .data import prepare, verify
 

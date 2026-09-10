@@ -20,7 +20,6 @@ import getpass
 import json
 import os
 import stat
-from pathlib import Path
 
 KEYSTORE_ENV = "STONKFLYRH_KEYSTORE"
 PASSWORD_ENV = "STONKFLYRH_KEYSTORE_PASSWORD"
@@ -50,7 +49,9 @@ def expected_address(role="trading"):
 
 
 def keystore_dir(path=None):
-    return Path(path or os.environ.get(KEYSTORE_ENV) or "keystore").resolve()
+    from .paths import resolve
+
+    return resolve(path or os.environ.get(KEYSTORE_ENV) or "keystore")
 
 
 def keystore_path(role, path=None):
