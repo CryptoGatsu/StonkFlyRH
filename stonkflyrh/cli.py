@@ -153,6 +153,7 @@ def settings_from(args, net_key):
         products=products,
         capital_usd=args.capital_usd,
         order_limit_usd=args.order_limit_usd,
+        spread_limit=os.environ.get("STONKFLYRH_SPREAD_LIMIT", "0.10"),
         learning=not args.frozen,
         screen_enabled=not args.no_screen,
         adapt_enabled=not args.no_adapt,

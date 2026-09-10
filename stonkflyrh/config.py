@@ -68,7 +68,9 @@ class Settings:
     protocol_fee_bps: int = 0
     pool_fee_tier: int = 10000
     slippage: str = "0.02"
-    spread_limit: str = "0.06"
+    # Pons graduates tokens into v4 pools with a ~3% fee each way, so a quoted
+    # round trip on Robinhood Chain starts near 7% before any impact.
+    spread_limit: str = "0.10"
     max_gas_price_gwei: str = "5"
     max_gas_share: str = "0.25"
     paper_gas_price_gwei: str = "0.05"

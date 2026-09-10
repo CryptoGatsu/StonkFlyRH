@@ -96,9 +96,10 @@ re-sent blindly.
 
 ## Limits
 
-Defaults: $100 capital, $10 maximum order, $1 minimum order, 2% slippage bound, 6%
-maximum round-trip pool cost per token, 24 orders/day, at least 60 s between orders,
-gas capped at 5 gwei and at 25% of an order's notional.
+Defaults: $100 capital, $10 maximum order, $1 minimum order, 2% slippage bound, 10%
+maximum round-trip pool cost per token (`STONKFLYRH_SPREAD_LIMIT`; Pons pools charge
+about 3% a side, so the quoted round trip starts near 7%), 24 orders/day, at least 60 s
+between orders, gas capped at 5 gwei and at 25% of an order's notional.
 
 Adaptation, on by default: order size shrinks linearly from the $10 cap toward 25% of it
 as realised volatility over the last 30 observations rises from 2% to 25% per
