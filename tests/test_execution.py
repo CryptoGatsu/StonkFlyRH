@@ -603,3 +603,26 @@ def test_provider_invoke_runs_the_guard(env):
 def test_reinforcement_signs(equity, anchor, expected):
     kind, _ = reinforcement(equity, anchor, "0.05")
     assert kind == expected
+
+
+def test_resume_clears_a_reviewed_halt_but_not_a_financial_stop(tmp_path):
+    import json as _json
+    from types import SimpleNamespace
+
+    from stonkflyrh.cli import cmd_resume
+
+    ledger = Ledger(tmp_path / "ledger.sqlite", Settings(), "paper", CAPITAL)
+    ledger.put("halted", "RuntimeError")
+    ledger.close()
+    (tmp_path / "error.json").write_text(_json.dumps({"reason": "permit2 approve transaction failed to broadcast"}))
+    cmd_resume(SimpleNamespace(out=tmp_path))
+    reopened = Ledger(tmp_path / "ledger.sqlite", Settings(), "paper")
+    try:
+        assert reopened.get("halted") is None
+        assert (tmp_path / "error.previous.json").exists() and not (tmp_path / "error.json").exists()
+        reopened.put("halted", "RuntimeError")
+    finally:
+        reopened.close()
+    (tmp_path / "error.json").write_text(_json.dumps({"reason": "Loss stop: equity fell"}))
+    with pytest.raises(RuntimeError, match="financial stop"):
+        cmd_resume(SimpleNamespace(out=tmp_path))

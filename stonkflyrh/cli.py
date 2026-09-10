@@ -76,6 +76,9 @@ def build_parser():
     airdrop.add_argument("--network", choices=sorted(NETWORKS), default=None)
     airdrop.add_argument("--tokens", type=Path)
 
+    resume = sub.add_parser("resume", help="Clear a halt after review, when no order is unresolved")
+    resume.add_argument("--out", type=Path, default=Path("runs/live"))
+
     serve = sub.add_parser("serve", help="Serve the live trade website")
     serve.add_argument("--out", type=Path, default=Path("runs/paper"))
     serve.add_argument("--host", default="127.0.0.1")
@@ -575,6 +578,41 @@ def cmd_airdrop(a):
         ledger.close()
 
 
+def cmd_resume(a):
+    """Clear a halt the operator has reviewed. Refuses while an order is
+    unresolved or when the halt was a financial stop."""
+    from .ledger import Ledger
+
+    settings, meta = run_settings(a.out)
+    ledger = Ledger(a.out / "ledger.sqlite", settings, meta["mode"])
+    try:
+        halted = ledger.get("halted")
+        if not halted:
+            print(json.dumps({"halted": None, "note": "nothing to clear"}))
+            return
+        if ledger.pending():
+            raise RuntimeError(
+                "An order is unresolved; reconcile it against the explorer first"
+            )
+        if (a.out / "STOP").exists():
+            raise RuntimeError("Remove the STOP file first")
+        reason = ""
+        err = a.out / "error.json"
+        if err.exists():
+            try:
+                reason = json.loads(err.read_text()).get("reason", "")
+            except json.JSONDecodeError:
+                reason = ""
+        if "Loss stop" in reason or "fee exceeded" in reason or "Loss stop" in str(halted):
+            raise RuntimeError("A financial stop cannot be cleared by this command")
+        ledger.put("halted", None)
+        if err.exists():
+            err.replace(a.out / "error.previous.json")
+        print(json.dumps({"cleared": halted, "reason": reason, "next": "start the worker"}, indent=2))
+    finally:
+        ledger.close()
+
+
 def cmd_serve(a):
     from .web.server import serve
 
@@ -646,6 +684,7 @@ def is_transient(exc):
         "TimeoutError", "ConnectionResetError", "ConnectionRefusedError", "BrokenPipeError",
         "gaierror", "timeout", "ProviderConnectionError", "TimeExhausted", "BadResponseFormat",
         "HTTPStatusError", "ReadError", "ConnectError", "RemoteProtocolError", "TooManyRequests",
+        "BroadcastFailed",
     }
     if names & transient:
         return True
@@ -657,7 +696,8 @@ def is_transient(exc):
 
 TRANSIENT_HALTS = {"HTTPError", "ConnectionError", "Timeout", "ReadTimeout", "TimeoutError",
                    "ConnectionResetError", "RemoteDisconnected", "ProtocolError", "OSError",
-                   "ChunkedEncodingError", "TimeExhausted", "RequestException", "TransientRPC"}
+                   "ChunkedEncodingError", "TimeExhausted", "RequestException", "TransientRPC",
+                   "BroadcastFailed"}
 
 
 def cmd_run(a, parser):
@@ -1220,6 +1260,7 @@ def main():
         "donors": cmd_donors,
         "discovery": cmd_discovery,
         "airdrop": cmd_airdrop,
+        "resume": cmd_resume,
         "preview": cmd_preview,
         "serve": cmd_serve,
         "status": cmd_status,

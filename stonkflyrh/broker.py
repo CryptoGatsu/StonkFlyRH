@@ -22,6 +22,11 @@ from .risk import Veto
 LIVE_OPT_IN = "I_ACCEPT_REAL_ONCHAIN_TRADES"
 
 
+class BroadcastFailed(RuntimeError):
+    """The node would not accept a transaction that is not an order (an
+    approval). Nothing is booked; the next attempt simply tries again."""
+
+
 class UnresolvedOrder(RuntimeError):
     pass
 
@@ -263,11 +268,19 @@ class RobinhoodChainBroker:
         )
         return self._send(tx, "approve")
 
+    def _nonce(self):
+        """The node's view, or one past the last transaction this process
+        broadcast, whichever is higher: a load-balanced public RPC can answer
+        with a node that has not yet seen the transaction mined a moment ago."""
+        seen = int(self.client.nonce(self.address))
+        local = getattr(self, "_next_nonce", None)
+        return max(seen, local) if local is not None else seen
+
     def _tx_fields(self, gas_price, gas=None):
         return {
             "from": self.address,
             "chainId": self.client.net.chain_id,
-            "nonce": self.client.nonce(self.address),
+            "nonce": self._nonce(),
             "gas": int(gas or self.s.gas_limit),
             "gasPrice": int(gas_price),
         }
@@ -282,11 +295,14 @@ class RobinhoodChainBroker:
         try:
             self.client.w3.eth.send_raw_transaction(signed.raw_transaction)
         except Exception as e:
+            why = f"{type(e).__name__}: {str(e)[:200]}"
             if order_id:
                 raise UnresolvedOrder(
-                    f"Broadcast outcome unknown for {tx_hash}; reconcile before trading again"
+                    f"Broadcast outcome unknown for {tx_hash}; reconcile before trading again ({why})"
                 ) from e
-            raise RuntimeError(f"{label} transaction failed to broadcast") from e
+            raise BroadcastFailed(f"{label} transaction failed to broadcast: {why}") from e
+        if "nonce" in tx:
+            self._next_nonce = int(tx["nonce"]) + 1
         receipt = self._await(tx_hash)
         if receipt["status"] != 1:
             if order_id:

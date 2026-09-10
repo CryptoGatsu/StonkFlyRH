@@ -135,6 +135,14 @@ network, quote asset, donor share — still refuse; those need a separate run di
 `python -m stonkflyrh discovery --out runs/live` shows the halt reason and the last
 `error.json` alongside the scan state.
 
+## Resuming after a halt
+
+`python -m stonkflyrh resume --out runs/live` clears a halt you have reviewed, then
+start the worker. It refuses while an order is unresolved (reconcile that against the
+explorer first), while a STOP file exists, and for a financial stop (loss stop, fee
+overrun), which cannot be cleared. Halts from network errors and from an approval the
+node would not accept clear themselves on the next start.
+
 ## Stopping
 
 `touch runs/live/STOP` stops before the next order and is checked again at the final send

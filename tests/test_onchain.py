@@ -359,3 +359,62 @@ def test_a_payout_stuck_without_a_hash_refuses_to_sweep_again(tmp_path):
             s.sweep()
     finally:
         ledger.close()
+
+
+# -- nonces and broadcast failures -------------------------------------------
+
+
+class Signed:
+    hash = bytes.fromhex("ab" * 32)
+    raw_transaction = b"raw"
+
+
+class SigningAccount(FakeAccount):
+    def __init__(self):
+        self.signed = []
+
+    def sign_transaction(self, tx):
+        self.signed.append(tx)
+        return Signed()
+
+
+def test_the_nonce_never_goes_backwards_when_the_rpc_lags(tmp_path):
+    """After a send, a load-balanced public RPC may still report the old nonce."""
+    client = FakeClient()
+    client.nonce = lambda _address: 7          # the node is stuck on 7
+    client.w3 = type("W3", (), {})()
+    client.w3.eth = type("Eth", (), {"send_raw_transaction": staticmethod(lambda raw: None)})()
+    b, ledger, _ = broker(tmp_path, client)
+    b.account = SigningAccount()
+    b._await = lambda tx_hash, timeout=180: receipt()
+    try:
+        b._send({**b._tx_fields(10**8, gas=120000), "to": TRADER, "data": b""}, "approve")
+        second = b._tx_fields(10**8, gas=120000)
+        assert b.account.signed[0]["nonce"] == 7 and second["nonce"] == 8
+        client.nonce = lambda _address: 12       # the node caught up and moved on
+        assert b._tx_fields(10**8)["nonce"] == 12
+    finally:
+        ledger.close()
+
+
+def test_an_approval_the_node_refuses_is_a_transient_failure_with_the_reason(tmp_path):
+    from stonkflyrh.broker import BroadcastFailed
+    from stonkflyrh.cli import TRANSIENT_HALTS, is_transient
+
+    client = FakeClient()
+    client.nonce = lambda _address: 1
+    client.w3 = type("W3", (), {})()
+
+    def refuse(raw):
+        raise ValueError({"code": -32000, "message": "nonce too low"})
+
+    client.w3.eth = type("Eth", (), {"send_raw_transaction": staticmethod(refuse)})()
+    b, ledger, _ = broker(tmp_path, client)
+    b.account = SigningAccount()
+    try:
+        with pytest.raises(BroadcastFailed, match="nonce too low") as info:
+            b._send({**b._tx_fields(10**8, gas=120000), "to": TRADER, "data": b""}, "permit2 approve")
+        assert is_transient(info.value) and "BroadcastFailed" in TRANSIENT_HALTS
+        assert getattr(b, "_next_nonce", None) is None      # nothing was broadcast
+    finally:
+        ledger.close()
