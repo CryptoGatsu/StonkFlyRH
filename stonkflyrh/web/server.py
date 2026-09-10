@@ -163,9 +163,12 @@ def snapshot(out):
         from ..wallet import FLY_WALLET
 
         provenance["wallets"] = {"fly": FLY_WALLET, "fly_expected": FLY_WALLET}
-    if not provenance.get("coin") and os.environ.get("STONKFLYRH_COIN_ADDRESS"):
-        provenance["coin"] = {"address": os.environ["STONKFLYRH_COIN_ADDRESS"], "symbol": None,
-                              "note": "the operator's coin, launched on Pons"}
+    if not provenance.get("coin"):
+        from ..wallet import coin_address
+
+        if coin_address():
+            provenance["coin"] = {"address": coin_address(), "symbol": None,
+                                  "note": "the operator's coin, launched on Pons"}
     if not provenance.get("donations") and os.environ.get("STONKFLYRH_DONATIONS", "1") == "1":
         provenance["donations"] = {"enabled": True, "address": provenance["wallets"]["fly"],
                                    "pending_worker": True}

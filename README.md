@@ -21,6 +21,19 @@ These are engineered reinforcement signals, **not modeled pain receptors**. Syna
 changes do not establish that it learns to trade profitably. [Model](docs/model.md) ·
 [Rug screen](docs/safety.md).
 
+## The coin
+
+| | |
+|---|---|
+| contract | `0xF12F616a0c02ee0dB385e0077D54cc07583676cB` |
+| chain | Robinhood Chain (4663) |
+| launched on | Pons, paired with GOOGL, from the deployer wallet `0x89a813e1Eb38d38EEBd1Fb91EdD464E6fCC22f25` |
+| fly wallet | `0x68e82397455232f6F726E44ad1c980C6C99B3201` (USDG and gas ETH only) |
+
+The site shows the contract address with explorer and Pons links. Discovery looks at
+this token first and admits it past the universe cap once its pool clears the screen;
+the fly never buys it before that. `STONKFLYRH_COIN_ADDRESS` overrides the address.
+
 ## Donations
 
 On live runs (`STONKFLYRH_DONATIONS=0` to disable), USDG sent to the fly wallet is

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .chain import NETWORKS, network
 from .config import D, Settings
-from .wallet import FLY_WALLET
+from .wallet import FLY_WALLET, coin_address
 
 
 def build_parser():
@@ -165,7 +165,7 @@ def settings_from(args, net_key):
         airdrop_daily_cap=os.environ.get("STONKFLYRH_AIRDROP_DAILY_CAP", "50000"),
         airdrop_reserve=os.environ.get("STONKFLYRH_AIRDROP_RESERVE", "0"),
         donor_share=os.environ.get("STONKFLYRH_DONOR_SHARE", "0.5"),
-        coin_address=os.environ.get("STONKFLYRH_COIN_ADDRESS", "").strip(),
+        coin_address=coin_address(),
         max_pool_usd=os.environ.get("STONKFLYRH_MAX_POOL_USD", "1000"),
         neural_ms=args.neural_ms,
         pulse_ms=min(200, args.neural_ms / 2),

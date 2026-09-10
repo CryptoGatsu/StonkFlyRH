@@ -32,6 +32,16 @@ FLY_WALLET = "0x68e82397455232f6F726E44ad1c980C6C99B3201"
 # else. STONKFLYRH_DEPLOYER_WALLET overrides it.
 DEPLOYER_WALLET = "0x89a813e1Eb38d38EEBd1Fb91EdD464E6fCC22f25"
 
+# The operator's coin on Robinhood Chain, launched on Pons from the deployer
+# wallet. Shown on the site, looked at first by discovery, admitted past the
+# universe cap once its pool clears the screen. STONKFLYRH_COIN_ADDRESS overrides.
+COIN_ADDRESS = "0xF12F616a0c02ee0dB385e0077D54cc07583676cB"
+
+
+def coin_address():
+    return (os.environ.get("STONKFLYRH_COIN_ADDRESS") or COIN_ADDRESS).strip()
+
+
 EXPECTED = {
     "trading": ("STONKFLYRH_FLY_WALLET", FLY_WALLET),
     "deployer": ("STONKFLYRH_DEPLOYER_WALLET", DEPLOYER_WALLET),
