@@ -502,6 +502,12 @@ def cmd_donors(a):
         if a.credit:
             if meta["mode"] != "live":
                 raise RuntimeError("Only a live run has on-chain donations to credit")
+            if not ledger.get("live_initialized"):
+                raise RuntimeError(
+                    "The worker has not passed preflight on this ledger yet, so there is no "
+                    "stake to move the donation out of. Start the worker, wait for the preflight "
+                    "line in its journal, then stop it and run this again."
+                )
             from .donations import Donations
             from .wallet import address as wallet_address
 
@@ -509,6 +515,9 @@ def cmd_donors(a):
             fly = wallet_address("trading") or FLY_WALLET
             donations = Donations(settings, ledger, pool, client, registry, None, fly)
             with ledger.transaction():
+                # The worker seeds the operator after preflight; if it was stopped
+                # before that, seed here from the balance preflight recorded.
+                pool.seed_operator(D(ledger.get("initial_cash")), time.time())
                 credited = donations.credit_transfer(a.credit, time.time(), equity)
             if not credited:
                 raise RuntimeError(

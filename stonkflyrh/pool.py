@@ -152,7 +152,12 @@ class Pool:
         nav = self.nav(equity)
         units = amount / nav
         if operator is None or operator["units"] < units:
-            raise ValueError("The operator's stake does not cover that amount")
+            have = operator["units"] * nav if operator else D(0)
+            raise ValueError(
+                f"The operator's stake (${have:.2f}) does not cover that ${amount:.2f}: the "
+                "money is not in the pool yet. If the worker has not run since the transfer "
+                "arrived, start it, let preflight or a tick book the balance, then retry."
+            )
         operator["units"] -= units
         operator["deposited"] = max(D(0), operator["deposited"] - amount)
         self._write(operator)
