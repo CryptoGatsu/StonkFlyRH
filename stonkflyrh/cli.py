@@ -1029,6 +1029,8 @@ def main():
         "chain": cmd_chain,
         "screen": cmd_screen,
         "fees": cmd_fees,
+        "donors": cmd_donors,
+        "discovery": cmd_discovery,
         "preview": cmd_preview,
         "serve": cmd_serve,
         "status": cmd_status,

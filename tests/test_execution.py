@@ -482,11 +482,28 @@ def test_reconcile_settles_an_interrupted_paper_fill(env):
     assert not ledger.pending()
 
 
-def test_a_changed_setting_refuses_to_reopen_a_ledger(tmp_path):
+def test_a_changed_frozen_setting_refuses_to_reopen_a_ledger(tmp_path):
     ledger = Ledger(tmp_path / "l.sqlite", Settings(), "paper", CAPITAL)
     ledger.close()
-    with pytest.raises(RuntimeError, match="order_limit_usd '10' -> '5'"):
-        Ledger(tmp_path / "l.sqlite", Settings(order_limit_usd="5"), "paper")
+    with pytest.raises(RuntimeError, match="donor_share '0.5' -> '0.4'"):
+        Ledger(tmp_path / "l.sqlite", Settings(donor_share="0.4"), "paper")
+
+
+def test_a_tuned_setting_is_recorded_not_refused(tmp_path):
+    """Operators tune order size and screen thresholds between restarts; a
+    live run must carry on and keep a record of what changed."""
+    ledger = Ledger(tmp_path / "l.sqlite", Settings(), "paper", CAPITAL)
+    ledger.close()
+    tuned = Settings(order_limit_usd="5", min_liquidity_usd="5000")
+    reopened = Ledger(tmp_path / "l.sqlite", tuned, "paper")
+    try:
+        assert reopened.get("settings") == tuned.signature()
+        assert reopened.get("settings_full")["order_limit_usd"] == "5"
+        changed = reopened.events("migration")[0]["settings_changed"]
+        assert changed["order_limit_usd"] == ["10", "5"]
+        assert changed["min_liquidity_usd"] == ["8000", "5000"]
+    finally:
+        reopened.close()
 
 
 def test_an_added_setting_migrates_the_ledger(tmp_path):

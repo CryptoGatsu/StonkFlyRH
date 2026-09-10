@@ -89,9 +89,17 @@ class Ledger:
         elif self.get("settings") != settings.signature():
             self._migrate_settings(settings)
 
+    # Values that define what the run *is*. Changing one of these under a live
+    # ledger would silently re-denominate cash or re-price donors, so they still
+    # refuse. Everything else (screen thresholds, discovery pacing, order size,
+    # adaptation) is a tuning knob an operator is expected to turn between
+    # restarts; the change is recorded against the ledger instead of halting.
+    FROZEN_SETTINGS = ("network", "quote_symbol", "quote_decimals", "donor_share")
+
     def _migrate_settings(self, settings):
-        """Accept a settings change that only adds fields (an upgrade); refuse
-        one that changes a value the run was started with."""
+        """Accept a settings change on an existing run: added fields (an
+        upgrade) and tuned values are recorded; a change to a frozen value is
+        refused."""
         stored = dict(self.get("settings_full") or {})
         current = dataclasses.asdict(settings)
         changed = {
@@ -99,10 +107,11 @@ class Ledger:
             for k in stored
             if k in current and k != "products" and stored[k] != current[k]
         }
-        if changed:
+        frozen = {k: v for k, v in changed.items() if k in self.FROZEN_SETTINGS}
+        if frozen:
             raise RuntimeError(
                 "Run settings changed: "
-                + ", ".join(f"{k} {a!r} -> {b!r}" for k, (a, b) in changed.items())
+                + ", ".join(f"{k} {a!r} -> {b!r}" for k, (a, b) in frozen.items())
                 + ". Use a separate run directory, or restore the old values."
             )
         added = sorted(k for k in current if k not in stored)
@@ -111,7 +120,19 @@ class Ledger:
             self.put("settings_full", current)
             self.db.execute(
                 "INSERT INTO events(kind,at,payload) VALUES (?,?,?)",
-                ("migration", 0, json.dumps({"settings_added": added}, allow_nan=False)),
+                (
+                    "migration",
+                    0,
+                    json.dumps(
+                        {
+                            "settings_added": added,
+                            "settings_changed": {
+                                k: [a, b] for k, (a, b) in sorted(changed.items())
+                            },
+                        },
+                        allow_nan=False,
+                    ),
+                ),
             )
 
     @contextlib.contextmanager
