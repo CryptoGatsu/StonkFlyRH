@@ -384,6 +384,45 @@ class ChainClient:
         except Exception:
             return None
 
+    def logs(self, params, chunk=2000, pause=0.35, retries=6, max_blocks=None):
+        """eth_getLogs over a block range the public RPC will actually serve.
+
+        Public endpoints rate-limit and cap the range per call. This walks the
+        range in chunks, pauses between them, backs off on an error, and halves
+        the chunk when the node says the range is too large. `max_blocks` caps
+        how far one call gets; the caller records where it stopped and continues
+        next time, so a long backlog is spread over several scans.
+        """
+        import time as _time
+
+        lo = int(params["fromBlock"])
+        hi = int(params["toBlock"])
+        if max_blocks is not None:
+            hi = min(hi, lo + int(max_blocks) - 1)
+        out = []
+        start = lo
+        while start <= hi:
+            end = min(hi, start + chunk - 1)
+            attempt = 0
+            while True:
+                try:
+                    out += self.w3.eth.get_logs({**params, "fromBlock": start, "toBlock": end})
+                    break
+                except Exception as e:
+                    text = str(e).lower()
+                    if ("range" in text or "too many" in text or "limit" in text) and chunk > 200:
+                        chunk //= 2
+                        end = min(hi, start + chunk - 1)
+                        continue
+                    attempt += 1
+                    if attempt > retries:
+                        raise
+                    _time.sleep(min(30, pause * (2**attempt)))
+            start = end + 1
+            if start <= hi and pause:
+                _time.sleep(pause)
+        return out, hi
+
     def nonce(self, address):
         # "pending" would let a stuck transaction silently shift the nonce of an
         # order this process has already persisted intent for.

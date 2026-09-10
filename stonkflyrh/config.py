@@ -96,6 +96,15 @@ class Settings:
     discovery_batch: int = 12
     max_products: int = 12
 
+    # -- donations ----------------------------------------------------------
+    donations_enabled: bool = False
+    donor_share: str = "0.5"
+    donation_min_usd: str = "1"
+    donor_min_payout_usd: str = "1"
+    donor_payout_interval_seconds: float = 3600
+    max_pool_usd: str = "1000"
+    loss_stop_fraction: str = "0.25"
+
     # -- adaptation ---------------------------------------------------------
     adapt_enabled: bool = True
     volatility_window: int = 30
@@ -170,8 +179,23 @@ class Settings:
             raise ValueError("Rate limit: >=60 s between orders, <=100 orders/day")
         self._check_screen()
         self._check_discovery()
+        self._check_donations()
         self._check_adaptation()
         self._check_neural()
+
+    def _check_donations(self):
+        if type(self.donations_enabled) is not bool:
+            raise ValueError("donations_enabled is a flag")
+        if not D(0) <= D(self.donor_share) <= D(1):
+            raise ValueError("Donor share must be a fraction between 0 and 1")
+        if D(self.donation_min_usd) < 0 or D(self.donor_min_payout_usd) <= 0:
+            raise ValueError("Donation and payout minimums must be sensible")
+        if not math.isfinite(self.donor_payout_interval_seconds) or self.donor_payout_interval_seconds < 300:
+            raise ValueError("Donor payouts run at most every five minutes")
+        if not D(self.capital_usd) <= D(self.max_pool_usd) <= D("100000"):
+            raise ValueError("Pool cap must hold the operator's stake and stay under $100,000")
+        if not D(0) < D(self.loss_stop_fraction) < 1:
+            raise ValueError("Loss stop fraction must be between 0 and 1")
 
     def _check_discovery(self):
         if type(self.discovery_enabled) is not bool:

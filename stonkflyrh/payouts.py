@@ -16,6 +16,51 @@ from .config import D, from_wei, to_wei
 from .fees import BENEFICIARY, fee_wallet
 
 
+def send_quote_token(client, account, token, destination, amount_wei, settings, mark):
+    """Sign, record the hash, broadcast, wait. `mark(status, tx_hash)` persists
+    each transition so an interrupted send is recoverable and never repeated."""
+    gas_price = client.gas_price()
+    ceiling = int(D(settings.max_gas_price_gwei) * D(10**9))
+    if gas_price > ceiling:
+        mark("REJECTED")
+        return {"status": "GAS_ABOVE_CEILING"}
+    tx = token.functions.transfer(destination, int(amount_wei)).build_transaction(
+        {
+            "from": checksum(account.address),
+            "chainId": client.net.chain_id,
+            "nonce": client.nonce(account.address),
+            "gas": 120000,
+            "gasPrice": gas_price,
+        }
+    )
+    signed = account.sign_transaction(tx)
+    tx_hash = hex32(signed.hash)
+    mark("UNKNOWN", tx_hash)
+    try:
+        client.w3.eth.send_raw_transaction(signed.raw_transaction)
+    except Exception as e:
+        raise RuntimeError(
+            f"Transfer {tx_hash} broadcast outcome unknown; reconcile before sending again"
+        ) from e
+    deadline = time.monotonic() + 180
+    while True:
+        try:
+            r = client.w3.eth.get_transaction_receipt(tx_hash)
+        except Exception:
+            r = None
+        if r is not None:
+            ok = int(r["status"]) == 1
+            mark("SENT" if ok else "REJECTED")
+            return {
+                "status": "SENT" if ok else "REVERTED",
+                "tx_hash": tx_hash,
+                "explorer": client.net.tx_url(tx_hash),
+            }
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"Transfer {tx_hash} not mined; resolve it before sending again")
+        time.sleep(2)
+
+
 class FeeSweeper:
     def __init__(self, settings, ledger, client, registry, account, destination=None):
         self.s = settings

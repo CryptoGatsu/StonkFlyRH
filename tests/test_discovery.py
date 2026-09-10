@@ -62,6 +62,17 @@ class Chain(FakePool):
         symbol, decimals = self.identities[address]
         return {"address": address, "symbol": symbol, "decimals": decimals}
 
+    def logs(self, params, chunk=2000, pause=0, retries=6, max_blocks=None):
+        # Mirrors ChainClient.logs without the sleeps.
+        lo, hi = int(params["fromBlock"]), int(params["toBlock"])
+        if max_blocks is not None:
+            hi = min(hi, lo + int(max_blocks) - 1)
+        out = []
+        for start in range(lo, hi + 1, chunk):
+            end = min(hi, start + chunk - 1)
+            out += self.w3.eth.get_logs({**params, "fromBlock": start, "toBlock": end})
+        return out, hi
+
 
 class Registry:
     quote_address = USDG
@@ -248,6 +259,23 @@ def test_scans_respect_the_interval(tmp_path):
         disc.scan(now, ETH_USD)
         assert not disc.due(now + 10)
         assert disc.due(now + 601)
+    finally:
+        ledger.close()
+
+
+def test_a_long_backlog_is_spread_over_several_scans(tmp_path):
+    chain = Chain([], 500000, {})
+    _, ledger, _, _, disc = build(tmp_path, chain, discovery_lookback_blocks=400000)
+    try:
+        now = time.time()
+        first = disc.scan(now, ETH_USD)
+        assert first["to_block"] == 100000 + PoolDiscovery.MAX_BLOCKS_PER_SCAN
+        assert first["backlog_blocks"] > 0
+        # Behind, so the next scan is due in a minute rather than ten.
+        assert disc.due(now + 61)
+        second = disc.scan(now + 61, ETH_USD)
+        assert second["from_block"] == first["to_block"]
+        assert second["backlog_blocks"] < first["backlog_blocks"]
     finally:
         ledger.close()
 

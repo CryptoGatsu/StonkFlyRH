@@ -75,7 +75,10 @@ def clean_symbol(raw, address, taken):
 class PoolDiscovery:
     """Scans factory logs for new quote-asset pools and screens what it finds."""
 
-    CHUNK = 4000
+    CHUNK = 2000
+    # Blocks covered by one scan. The first scan of a fresh run has a 400k-block
+    # backlog; spreading it over several scans keeps each one a few requests.
+    MAX_BLOCKS_PER_SCAN = 60000
 
     def __init__(self, settings, client, registry, ledger, market, screen, factory):
         self.s = settings
@@ -87,9 +90,6 @@ class PoolDiscovery:
         self.factory = checksum(factory)
         self.topic = pool_created_topic()
         self.last_scan = 0.0
-
-    def due(self, now):
-        return now - self.last_scan >= self.s.discovery_interval_seconds
 
     def scan(self, now, eth_usd):
         self.last_scan = now
@@ -108,17 +108,14 @@ class PoolDiscovery:
         }
         if head <= start:
             return report
-        logs = []
-        for lo in range(start + 1, head + 1, self.CHUNK):
-            hi = min(head, lo + self.CHUNK - 1)
-            logs += self.client.w3.eth.get_logs(
-                {
-                    "fromBlock": lo,
-                    "toBlock": hi,
-                    "address": self.factory,
-                    "topics": [self.topic],
-                }
-            )
+        logs, scanned_to = self.client.logs(
+            {"fromBlock": start + 1, "toBlock": head, "address": self.factory, "topics": [self.topic]},
+            chunk=self.CHUNK,
+            max_blocks=self.MAX_BLOCKS_PER_SCAN,
+        )
+        report["to_block"] = scanned_to
+        report["backlog_blocks"] = head - scanned_to
+        self.l.put("discovery_backlog", head - scanned_to)
         candidates = []
         for log in logs:
             try:
@@ -153,9 +150,15 @@ class PoolDiscovery:
                 report["added"].append(outcome)
             else:
                 report["rejected"].append(outcome)
-        self.l.put("discovery_block", head)
+        self.l.put("discovery_block", scanned_to)
         self.l.record_discovery(report)
         return report
+
+    def due(self, now):
+        # With a backlog still to cover, scan again soon rather than in ten minutes.
+        behind = self.l.get("discovery_backlog") or 0
+        interval = 60 if behind else self.s.discovery_interval_seconds
+        return now - self.last_scan >= interval
 
     def _consider(self, created, now, eth_usd):
         address = created["token"]

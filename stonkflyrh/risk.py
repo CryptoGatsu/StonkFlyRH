@@ -123,7 +123,12 @@ class Guard:
                 raise Veto("Quote identity mismatch")
             if not -0.5 <= now - q.timestamp <= self.s.max_quote_age:
                 raise Veto("Stale or future quote")
-        if self.l.equity(quotes, eth_usd) <= D(self.l.get("initial_cash")) - limits["loss_stop"]:
+        contributed = D(self.l.get("initial_cash"))
+        # An absolute stop for a small stake, a fractional one once the pool has
+        # grown: whichever allows the larger drawdown, so donations do not make
+        # a $25 stop trip on noise.
+        stop = max(limits["loss_stop"], contributed * D(self.s.loss_stop_fraction))
+        if self.l.equity(quotes, eth_usd) <= contributed - stop:
             self.l.halt("Loss stop reached; holdings remain exposed")
             raise Veto("Loss stop reached")
 

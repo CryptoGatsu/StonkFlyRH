@@ -52,6 +52,10 @@ class Ledger:
             "CREATE TABLE IF NOT EXISTS discovery (id INTEGER PRIMARY KEY AUTOINCREMENT,"
             "at REAL NOT NULL,report TEXT NOT NULL)"
         )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "kind TEXT NOT NULL,at REAL NOT NULL,payload TEXT NOT NULL)"
+        )
         self.fees = FeeBook(self)
         if self.get("settings") is None:
             if capital is None:
@@ -323,6 +327,54 @@ class Ledger:
             "SELECT report FROM discovery ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [json.loads(r[0]) for r in rows]
+
+    # -- money arriving and leaving outside of trades --------------------------
+
+    def deposit(self, amount, now):
+        """Book an external deposit: cash, contributed capital and the reward
+        anchor all rise together, so new money is never read as profit."""
+        amount = D(amount)
+        if amount <= 0:
+            return None
+        with self.transaction():
+            self.put("cash", str(self.cash + amount))
+            self.put("initial_cash", str(D(self.get("initial_cash")) + amount))
+            self.put("anchor", str(D(self.get("anchor")) + amount))
+            self.put("deposited_total", str(D(self.get("deposited_total") or 0) + amount))
+        return {"amount": str(amount), "at": now}
+
+    def withdraw(self, amount, now):
+        """Book money leaving as a payout: cash and the anchor fall together."""
+        amount = D(amount)
+        if amount <= 0:
+            return None
+        if amount > self.cash:
+            raise RuntimeError("Withdrawal exceeds cash")
+        with self.transaction():
+            self.put("cash", str(self.cash - amount))
+            self.put("anchor", str(D(self.get("anchor")) - amount))
+            self.put("withdrawn_total", str(D(self.get("withdrawn_total") or 0) + amount))
+        return {"amount": str(amount), "at": now}
+
+    def record_event(self, kind, payload):
+        self.db.execute(
+            "INSERT INTO events(kind,at,payload) VALUES (?,?,?)",
+            (kind, payload.get("at", 0), json.dumps(payload, allow_nan=False)),
+        )
+
+    def events(self, kind, limit=20):
+        rows = self.db.execute(
+            "SELECT payload FROM events WHERE kind=? ORDER BY id DESC LIMIT ?", (kind, limit)
+        ).fetchall()
+        return [json.loads(r[0]) for r in rows]
+
+    def fees_tx_hashes(self):
+        return {
+            r[0]
+            for r in self.db.execute(
+                "SELECT tx_hash FROM fee_payouts WHERE tx_hash IS NOT NULL"
+            )
+        }
 
     # -- rug memory ----------------------------------------------------------
 
