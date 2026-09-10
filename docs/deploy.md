@@ -18,8 +18,11 @@ other memecoin, once it has graduated to its Uniswap pool.
 
 ## 1. Install
 
-The connectome needs the full MaleCNS graph in memory: **16 GB RAM**, 4+ cores,
-~10 GB disk, Ubuntu 22.04/24.04. No GPU. One command as root:
+The connectome holds the full MaleCNS graph in memory. **16 GB RAM** is the
+comfortable size; **8 GB works** with the swapfile the installer adds, at the
+cost of a slower first build and possibly slower ticks — resize in place later
+if it feels sluggish. 4+ cores, ~15 GB disk, Ubuntu 22.04/24.04, no GPU. One
+command as root:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/CryptoGatsu/StonkFlyRH/main/deploy/install.sh | sudo bash

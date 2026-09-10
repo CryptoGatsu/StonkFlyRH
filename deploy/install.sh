@@ -12,6 +12,17 @@ echo "==> packages"
 apt-get update -qq
 apt-get install -y -qq python3.11 python3.11-venv python3.11-dev build-essential git nginx >/dev/null
 
+echo "==> swap"
+# The connectome's build step spikes above 8 GB. A machine under 12 GB gets an
+# 8 GB swapfile so `prepare` finishes instead of being killed.
+total_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+if [ "$total_kb" -lt 12000000 ] && [ ! -f /swapfile ]; then
+  fallocate -l 8G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  sysctl -q vm.swappiness=10 && echo 'vm.swappiness=10' > /etc/sysctl.d/90-stonkflyrh.conf
+  echo "    8 GB swapfile added (machine has $((total_kb / 1024 / 1024)) GB RAM)"
+fi
+
 echo "==> user and checkout"
 id -u stonkfly >/dev/null 2>&1 || adduser --system --group --home "$HOME_DIR" stonkfly
 if [ ! -d "$HOME_DIR/.git" ]; then
