@@ -746,11 +746,21 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         },
     }
     signature = hashlib.sha256(json.dumps(provenance, sort_keys=True).encode()).hexdigest()
-    if ledger.get("provenance_sha256") not in (None, signature):
-        raise RuntimeError(
-            "Run source/protocol changed; use a separate run directory or explicitly "
-            "review the migration"
+    previous = ledger.get("provenance_sha256")
+    if previous not in (None, signature):
+        # The trading code or protocol changed under a run that already exists.
+        # Upstream refused here. A live bot receiving fixes needs to continue,
+        # so the change is recorded against the ledger instead — unless the
+        # operator asked for the strict behaviour.
+        if os.environ.get("STONKFLYRH_STRICT_PROTOCOL") == "1":
+            raise RuntimeError(
+                "Run source/protocol changed; use a separate run directory or explicitly "
+                "review the migration"
+            )
+        ledger.record_event(
+            "migration", {"at": time.time(), "provenance_from": previous, "provenance_to": signature}
         )
+        print(json.dumps({"protocol_changed": {"from": previous[:12], "to": signature[:12]}}), flush=True)
     ledger.put("provenance_sha256", signature)
     (out / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
 

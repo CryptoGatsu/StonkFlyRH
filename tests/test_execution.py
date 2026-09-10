@@ -482,11 +482,32 @@ def test_reconcile_settles_an_interrupted_paper_fill(env):
     assert not ledger.pending()
 
 
-def test_settings_mismatch_refuses_to_reopen_a_ledger(tmp_path):
+def test_a_changed_setting_refuses_to_reopen_a_ledger(tmp_path):
     ledger = Ledger(tmp_path / "l.sqlite", Settings(), "paper", CAPITAL)
     ledger.close()
-    with pytest.raises(RuntimeError, match="mismatch"):
+    with pytest.raises(RuntimeError, match="order_limit_usd '10' -> '5'"):
         Ledger(tmp_path / "l.sqlite", Settings(order_limit_usd="5"), "paper")
+
+
+def test_an_added_setting_migrates_the_ledger(tmp_path):
+    """An upgrade that adds a field must not force a fresh run."""
+    import dataclasses
+
+    ledger = Ledger(tmp_path / "l.sqlite", Settings(), "paper", CAPITAL)
+    stored = dict(ledger.get("settings_full"))
+    stored.pop("coin_address")                      # pretend the run predates this field
+    ledger.put("settings_full", stored)
+    ledger.put("settings", "old-signature")
+    ledger.close()
+    reopened = Ledger(tmp_path / "l.sqlite", Settings(), "paper")
+    try:
+        assert reopened.get("settings") == Settings().signature()
+        expected = dataclasses.asdict(Settings())
+        expected["products"] = list(expected["products"])   # JSON turns tuples into lists
+        assert reopened.get("settings_full") == expected
+        assert reopened.events("migration")[0]["settings_added"] == ["coin_address"]
+    finally:
+        reopened.close()
 
 
 def test_mode_mismatch_refuses_to_reopen_a_ledger(tmp_path):

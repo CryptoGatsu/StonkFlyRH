@@ -84,9 +84,34 @@ class Ledger:
                     "last_attempt": 0,
                 }.items():
                     self.put(k, v)
-        elif self.get("settings") != settings.signature() or self.get("mode") != mode:
+        elif self.get("mode") != mode:
+            raise RuntimeError("Run mode mismatch; use a separate run directory")
+        elif self.get("settings") != settings.signature():
+            self._migrate_settings(settings)
+
+    def _migrate_settings(self, settings):
+        """Accept a settings change that only adds fields (an upgrade); refuse
+        one that changes a value the run was started with."""
+        stored = dict(self.get("settings_full") or {})
+        current = dataclasses.asdict(settings)
+        changed = {
+            k: (stored[k], current[k])
+            for k in stored
+            if k in current and k != "products" and stored[k] != current[k]
+        }
+        if changed:
             raise RuntimeError(
-                "Run settings/mode mismatch; use a separate run directory"
+                "Run settings changed: "
+                + ", ".join(f"{k} {a!r} -> {b!r}" for k, (a, b) in changed.items())
+                + ". Use a separate run directory, or restore the old values."
+            )
+        added = sorted(k for k in current if k not in stored)
+        with self.transaction():
+            self.put("settings", settings.signature())
+            self.put("settings_full", current)
+            self.db.execute(
+                "INSERT INTO events(kind,at,payload) VALUES (?,?,?)",
+                ("migration", 0, json.dumps({"settings_added": added}, allow_nan=False)),
             )
 
     @contextlib.contextmanager
