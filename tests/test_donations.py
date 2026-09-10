@@ -12,10 +12,12 @@ from stonkflyrh.ledger import Ledger
 from stonkflyrh.pool import OPERATOR, Pool
 from tests.test_execution import ETH_USD, quote
 
-USDG = "0x" + "11" * 20
-FLY = "0x" + "33" * 20
-ALICE = "0x" + "aa" * 20
-POOL_ADDR = "0x" + "99" * 20
+from stonkflyrh.chain import checksum
+
+USDG = checksum("0x" + "11" * 20)
+FLY = checksum("0x" + "33" * 20)
+ALICE = checksum("0x" + "aa" * 20)   # logs decode to checksummed addresses
+POOL_ADDR = checksum("0x" + "99" * 20)
 
 
 def pad(addr):
@@ -130,6 +132,37 @@ def test_a_fresh_run_starts_counting_at_the_head(tmp_path):
         d = Donations(settings, ledger, pool, Client([], head=777), Registry(), None, FLY)
         d.start_at_head(0)
         assert ledger.get("donations_block") == 777
+    finally:
+        ledger.close()
+
+
+def test_a_failed_send_costs_the_donor_nothing(tmp_path, monkeypatch):
+    _, ledger, pool, d = build(tmp_path, [])
+    try:
+        pool.deposit(ALICE, D("100"), D("100"), 1)
+        ledger.deposit(D("100"), 1)
+        ledger.put("cash", "240")
+        monkeypatch.setattr(d, "_transfer", lambda *a, **k: {"status": "GAS_ABOVE_CEILING"})
+        results = d.pay(time.time(), ETH_USD, {})
+        assert results[0]["status"] == "GAS_ABOVE_CEILING"
+        assert pool.participant(ALICE)["units"] == D("100")   # untouched
+        assert ledger.cash == D("240")
+    finally:
+        ledger.close()
+
+
+def test_a_sent_payout_settles_and_leaves_the_wallet(tmp_path, monkeypatch):
+    _, ledger, pool, d = build(tmp_path, [])
+    try:
+        pool.deposit(ALICE, D("100"), D("100"), 1)
+        ledger.deposit(D("100"), 1)
+        ledger.put("cash", "240")
+        monkeypatch.setattr(d, "_transfer", lambda *a, **k: {"status": "SENT", "tx_hash": "0x1"})
+        results = d.pay(time.time(), ETH_USD, {})
+        assert results[0]["status"] == "SENT"
+        assert ledger.cash == D("230")
+        assert pool.participant(ALICE)["paid_out"] == D("10")
+        assert (pool.participant(ALICE)["units"] * pool.nav(ledger.cash)).quantize(D("0.01")) == D("100")
     finally:
         ledger.close()
 

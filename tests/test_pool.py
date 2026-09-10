@@ -63,20 +63,20 @@ def test_a_donor_is_paid_half_the_gain_and_the_operator_gets_the_rest(pool):
     assert owed[0]["gain"] == D("20") and owed[0]["payout"] == D("10")
     settled = p.settle(ALICE, equity, 2)
     assert settled["payout"] == D("10") and settled["fee"] == D("10")
+    after = equity - settled["payout"]                # the $10 has left the wallet
     # Alice is back at her high-water value; the fee arrived as operator units.
-    assert close(value(p, ALICE, equity), "100")
-    assert close(value(p, OPERATOR, equity), "130")  # 120 of own gain + 10 fee
-    # Nothing was created: donor value + operator value == equity.
-    assert close(value(p, ALICE, equity) + value(p, OPERATOR, equity), equity)
+    assert close(value(p, ALICE, after), "100")
+    assert close(value(p, OPERATOR, after), "130")   # 120 of own gain + 10 fee
+    # Nothing was created: donor value + operator value == what is left.
+    assert close(value(p, ALICE, after) + value(p, OPERATOR, after), after)
 
 
-def test_nav_is_unchanged_by_a_settlement(pool):
+def test_nav_is_unchanged_once_the_payout_has_left(pool):
     p, _ = pool
     p.deposit(ALICE, D("100"), D("100"), 1)
     before = p.nav(D("240"))
-    p.settle(ALICE, D("240"), 2)
-    # Payout cash has not left yet in this test; units moved, NAV did not.
-    assert close(p.nav(D("240")), before)
+    settled = p.settle(ALICE, D("240"), 2)
+    assert close(p.nav(D("240") - settled["payout"]), before)
 
 
 def test_no_payout_below_the_high_water_mark(pool):

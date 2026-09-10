@@ -185,10 +185,10 @@ class Pool:
     def settle(self, address, equity, now):
         """Crest a participant: pay their share, move the rest to the operator.
 
-        Returns the payout amount (USDG) or None. Units leave the donor equal to
-        the whole gain at this NAV, so their remaining value is their previous
-        high-water value; the operator's share arrives as units, so the pool's
-        NAV is unchanged by the transfer itself.
+        Units leave the donor equal to the whole gain at this NAV, so their
+        remaining value is their previous high-water value; the operator's share
+        arrives as units. Pair this with `ledger.withdraw(payout)`: once the
+        payout cash has left, NAV is exactly what it was before.
         """
         nav = self.nav(equity)
         p = self.participant(address)

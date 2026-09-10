@@ -174,12 +174,12 @@ class Donations:
             if dry_run:
                 results.append({**self._row(item), "status": "WOULD_SEND"})
                 continue
-            settled = self.pool.settle(item["address"], equity, now)
-            if settled is None:
-                continue
-            amount_wei = to_wei(settled["payout"], self.qd)
-            outcome = self._transfer(item["address"], amount_wei, settled["gain"], now)
+            # Send first. Units move and cash is booked out only once the
+            # transfer is on chain, so a failed send costs the donor nothing.
+            amount_wei = to_wei(item["payout"], self.qd)
+            outcome = self._transfer(item["address"], amount_wei, item["gain"], now)
             if outcome["status"] in ("SENT", "UNKNOWN"):
+                settled = self.pool.settle(item["address"], equity, now)
                 self.l.withdraw(settled["payout"], now)
             results.append({**self._row(item), **outcome})
         if results:
