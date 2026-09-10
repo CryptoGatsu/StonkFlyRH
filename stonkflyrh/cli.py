@@ -608,12 +608,14 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         "pain_receptors_modeled": False,
         "timing": "Each observation advances configured neural_ms regardless of wall-market "
         "time; no claim of real-time fly physiology.",
+        # The site is read-only and cannot affect a trade, so updating it must
+        # not invalidate a running ledger: web/ is left out of the protocol hash.
         "source_sha256": {
             str(path.relative_to(Path(__file__).parent)): hashlib.sha256(
                 path.read_bytes()
             ).hexdigest()
             for path in Path(__file__).parent.rglob("*")
-            if path.suffix in (".py", ".cpp")
+            if path.suffix in (".py", ".cpp") and "web" not in path.parts
         },
     }
     signature = hashlib.sha256(json.dumps(provenance, sort_keys=True).encode()).hexdigest()

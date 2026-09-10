@@ -93,6 +93,41 @@ Preflight reads everything and sends nothing, sizes the ledger from the wallet's
 actual USDG, and only then does the loop begin trading. `touch runs/live/STOP`
 stops it from another terminal; restarting the unit resumes from the checkpoint.
 
+## Updating
+
+The site is `stonkflyrh/web/static/index.html` in the repo, served off the
+checkout. Push to GitHub, then on the server:
+
+```sh
+sudo /opt/stonkflyrh/deploy/update.sh              # pull + restart the site
+sudo /opt/stonkflyrh/deploy/update.sh --worker     # also restart the worker
+```
+
+The site can be updated freely while the fly trades: it holds no key, and the
+`web/` package is excluded from the run's protocol hash. Updating the *trading*
+code is different — the run records a hash of every trading module at start,
+and a resumed run whose code changed refuses with "Run source/protocol changed"
+so you never unknowingly continue a ledger under different rules. Stop the
+worker, start again with a fresh `--out` (or `STONKFLYRH_MODE` directory), and
+the old run stays intact for its own record.
+
+## The domain
+
+`deploy/nginx.conf` is written for **stonkflyrh.com**. Point A records for
+`stonkflyrh.com` and `www.stonkflyrh.com` at the server, then:
+
+```sh
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/stonkflyrh
+sudo ln -s /etc/nginx/sites-available/stonkflyrh /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+sudo snap install --classic certbot
+sudo certbot --nginx -d stonkflyrh.com -d www.stonkflyrh.com
+```
+
+certbot adds TLS and the redirect to HTTPS. The page publishes the fly wallet's
+address, its balances and every trade; that is what it is for, but know it.
+
 ## 6. Operating it
 
 The **worker does not auto-restart**. When it exits it has halted — loss stop,
