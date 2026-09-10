@@ -597,6 +597,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
     from .risk import Guard, Veto
     from .safety import RugScreen, RugWatch
     from .wallet import address as wallet_address
+    from .wallet import expected_address
 
     verified_data = verify()
     previous = ledger.get("observation")
@@ -653,7 +654,11 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         },
         "contracts": verified or {"note": "fixture run; no chain contracts used"},
         "usd_reference": oracle.report(),
-        "wallets": {"fly": wallet_address("trading"), "fee": fee_wallet()},
+        "wallets": {
+            "fly": wallet_address("trading"),
+            "fly_expected": expected_address(),
+            "fee": fee_wallet(),
+        },
         "screen": {"enabled": screen is not None},
         "discovery": {
             "enabled": discovery is not None,
@@ -668,7 +673,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             "min_usd": settings.donation_min_usd,
             "payout_interval_seconds": settings.donor_payout_interval_seconds,
             "max_pool_usd": settings.max_pool_usd,
-            "address": wallet_address("trading") if a.live else None,
+            "address": wallet_address("trading") if a.live else expected_address(),
         },
         "decoder": "DNp20 mean R-L: buy/sell; DNpe017 spike gate; otherwise hold. "
         "Engineered fixed mapping.",

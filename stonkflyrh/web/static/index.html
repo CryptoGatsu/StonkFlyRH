@@ -286,8 +286,7 @@
         <details>
           <summary><span class="label ink">Performance &amp; limits</span><span class="plus">+</span></summary>
           <div class="kv" id="limits"></div>
-          <div class="label" style="margin-bottom:6px">Fly wallet</div><div class="addr" id="w-fly">not imported</div>
-          <div class="label" style="margin:12px 0 6px">Fee wallet</div><div class="addr" id="w-fee" style="margin-bottom:18px">not configured</div>
+          <div class="label" style="margin-bottom:6px">Fly wallet</div><div class="addr" id="w-fly" style="margin-bottom:18px">—</div>
           <div class="label" style="margin-bottom:6px">Blocklist</div><div class="chips" id="blocklist" style="margin:0 0 18px"><span class="pill">empty</span></div>
         </details>
       </section>
@@ -419,8 +418,10 @@ function renderLimits() {
   add("Network", (prov.network && prov.network.name) || meta.network || "—");
   $("limits").innerHTML = kv.join("");
   const wallets = prov.wallets || {};
-  $("w-fly").textContent = wallets.fly || "not imported";
-  $("w-fee").textContent = wallets.fee || "not configured";
+  const fly = wallets.fly || wallets.fly_expected || "";
+  $("w-fly").innerHTML = fly
+    ? (explorer ? `<a href="${esc(explorer)}/address/${esc(fly)}" target="_blank" rel="noopener">${esc(fly)}</a>` : esc(fly))
+    : "—";
   const blocked = meta.blocklist || [];
   $("blocklist").innerHTML = blocked.length
     ? blocked.map((b) => `<span class="pill no" title="${esc(b.reason)}">${esc(b.product)}</span>`).join("")
