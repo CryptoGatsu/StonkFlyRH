@@ -21,7 +21,7 @@ TimeoutStopSec=120
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/opt/stonkflyrh/runs /opt/stonkflyrh/keystore /opt/stonkflyrh/data
+ReadWritePaths=-/opt/stonkflyrh/runs -/opt/stonkflyrh/keystore -/opt/stonkflyrh/data
 # Sized for an 8 GB droplet with the installer's 8 GB swapfile. On a 16 GB
 # machine raise MemoryMax to 14G.
 MemoryMax=6800M

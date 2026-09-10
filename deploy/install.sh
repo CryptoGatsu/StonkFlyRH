@@ -58,7 +58,7 @@ sudo -u stonkfly .venv/bin/pip install -q -e '.[test]'
 echo "==> config"
 [ -f .env ] || { sudo -u stonkfly cp .env.example .env; chmod 600 .env; }
 [ -f tokens.json ] || sudo -u stonkfly cp tokens.example.json tokens.json
-sudo -u stonkfly mkdir -p runs keystore
+sudo -u stonkfly mkdir -p runs keystore data
 chmod 700 keystore
 
 echo "==> services"
