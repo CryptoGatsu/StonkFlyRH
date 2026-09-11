@@ -18,6 +18,16 @@ SWAP_V4 = "Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)"
 SWAP_V3 = "Swap(address,address,int256,int256,uint160,uint128,int24)"
 
 
+def _tx_hash(log):
+    h = log.get("transactionHash")
+    if h is None:
+        return None
+    if isinstance(h, (bytes, bytearray)):
+        return "0x" + bytes(h).hex()
+    text = str(h)
+    return text.lower() if text.startswith("0x") else "0x" + text.lower()
+
+
 def swap_topic(signature):
     from eth_utils import keccak
 
@@ -95,6 +105,10 @@ class ActivityMonitor:
         logs = self._swap_logs(entry, max(0, head - blocks), head)
         if logs is None:
             return None
+        # The fly's own swaps are not other people trading.
+        own = self.l.own_swap_hashes() if hasattr(self.l, "own_swap_hashes") else set()
+        if own:
+            logs = [l for l in logs if _tx_hash(l) not in own]
         last_block = max((int(l["blockNumber"]) for l in logs), default=None)
         result = {
             "product": product,

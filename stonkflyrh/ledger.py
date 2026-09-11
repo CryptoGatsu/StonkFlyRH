@@ -436,6 +436,15 @@ class Ledger:
         ).fetchall()
         return [json.loads(r[0]) for r in rows]
 
+    def own_swap_hashes(self):
+        """Transaction hashes of the run's own orders, lowercased: activity that
+        is the fly's own is not evidence that anyone else is here."""
+        return {
+            str(r[0]).lower()
+            for r in self.db.execute("SELECT exchange_id FROM orders WHERE exchange_id IS NOT NULL")
+            if r[0]
+        }
+
     def fees_tx_hashes(self):
         return {
             r[0]

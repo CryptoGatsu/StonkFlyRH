@@ -124,3 +124,19 @@ def test_no_swaps_at_all_in_the_window_also_means_leaving(tmp_path):
         assert why and "no swaps" in why
     finally:
         ledger.close()
+
+
+def test_the_flys_own_swaps_do_not_count_as_activity(tmp_path):
+    """A coin the fly just bought must not look alive because of that buy."""
+    ours = "0x" + "77" * 32
+    logs = [{**swap_log(99_990), "transactionHash": ours}, {**swap_log(99_980), "transactionHash": "0x" + "88" * 32}]
+    _, ledger, monitor = build(tmp_path, logs, min_recent_swaps=1)
+    try:
+        ledger.db.execute(
+            "INSERT INTO orders VALUES (?,?,?,?,?,?)",
+            ("cid-1", "SETTLED", 0.0, "{}", ours, None),
+        )
+        result = monitor.observe("WOOF", V4_ENTRY, now=1000.0)
+        assert result["swaps"] == 1                      # the other wallet's swap only
+    finally:
+        ledger.close()
