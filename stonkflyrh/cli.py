@@ -1547,6 +1547,10 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
                 print(json.dumps({"sell_request": requested, "dropped": "the fly holds none"}), flush=True)
             elif requested not in quotes or quotes[requested].written_off:
                 print(json.dumps({"sell_request": requested, "waiting": "the pool will not quote"}), flush=True)
+            elif ledger.positions[requested] * quotes[requested].bid < limits["min_order"]:
+                # Dust below the minimum order can never clear the router.
+                _sell_request_path(out, requested).unlink(missing_ok=True)
+                print(json.dumps({"sell_request": requested, "dropped": "dust below the minimum order"}), flush=True)
             else:
                 asked.append(requested)
         guard.exit_requests = set(asked)
