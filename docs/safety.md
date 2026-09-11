@@ -23,7 +23,6 @@ reputation service, no allowlist, no score from anywhere else.
 | `executable` | v4, live runs only: the real buy at the run's order size, dry-run through the Universal Router from the fly wallet | it reverts — a quote never moves tokens, so a token whose transfer refuses the router (honeypot, blacklist, trading not open) passes every quote and fails here. A missing approval is not held against the token. This check vetoes the buy and shows on the site but never evicts a token from the universe: the run's own swap path can be what is failing |
 | `activity` | the pool's own `Swap` events in the last `activity_window_seconds` (1 h) | fewer than `min_recent_swaps` (5): nobody is trading it |
 | `crash` | v4: the price path from sqrtPriceX96 in the pool's swap events over `crash_window_seconds` (6 h) | the token sits more than `max_recent_drawdown` (60%) below its high in the window: a rug still being traded |
-| `market_cap` | price × total supply, from the run's own quote | under `min_market_cap_usd` ($10,000): a graveyard, however deep the pool |
 | `pool_empty` | v4: liquidity is zero | the pool exists but has no liquidity yet (a Pons token before graduation): not a rejection — the candidate is screened again every 30 minutes for a day |
 | `sellable` | quoter, token → USDG | the sell leg returns nothing: a honeypot |
 | `transfer_tax` | round trip of a tiny probe, minus twice the pool fee, halved | above the ceiling (default 5% per side) |
@@ -37,10 +36,13 @@ and still be empty by the time the brain says buy. So a buy asks the pool
 itself, fresh, about the last `hot_window_seconds` (15 minutes): at least
 `min_hot_swaps` (3) swaps, the last one no older than `max_last_swap_age_seconds`
 (10 minutes), and the price no more than `max_hot_drawdown` (25%) below the
-window's high, and at least `min_volume_usd` ($5,000) traded in the last
+window's high, and at least `min_volume_usd` ($3,000) traded in the last
 `volume_window_seconds` (5 minutes): the token amounts in the swaps, priced at
 the fly's own quote. The fly's own swaps do not count. A pool whose events
 cannot be read is not bought: for a buy, unknown means no.
+
+Market cap is never asked, at admission or at the buy: a small coin with people
+trading it is a trade, and a large one nobody touches is not.
 
 The same reading steers attention. Each tick the fly refreshes one coin's heat
 and looks at its held coins plus the three hottest unheld ones, so the brain is

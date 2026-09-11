@@ -244,7 +244,7 @@ class RugScreen:
 
     # Bump when a check is added or its meaning changes: cached verdicts from
     # an older screen are then re-run rather than trusted.
-    SCREEN_VERSION = 3
+    SCREEN_VERSION = 4
 
     def _run(self, product, entry, pool, eth_usd):
         address = checksum(entry["address"])
@@ -266,8 +266,9 @@ class RugScreen:
     activity = None
 
     def _market(self, product, entry):
-        """Is anyone here? Recent swaps in the pool, and a market cap above the
-        graveyard line (price × total supply, from the run's own quote)."""
+        """Is anyone here? Recent swaps in the pool, and a price path that has
+        not just collapsed. Market cap is not asked: only volume and recent
+        activity decide, at admission here and again at the buy."""
         checks = []
         if self.activity is not None and self.s.activity_enabled:
             try:
@@ -293,25 +294,6 @@ class RugScreen:
                     f"{dd * 100:.0f}% below its {hours:.0f}h high over {crash['swaps']} swaps, ceiling {ceiling * 100:.0f}%",
                     str(dd),
                 ))
-        floor = D(self.s.min_market_cap_usd)
-        supply = entry.get("total_supply")
-        if floor > 0 and not supply and entry.get("address"):
-            # The universe entry predates supply tracking: ask the token now
-            # rather than skip the check.
-            try:
-                supply = str(int(self.client.total_supply(entry["address"])))
-            except Exception:
-                supply = None
-        if floor > 0 and supply:
-            try:
-                qd = self.registry.quote_decimals
-                unit = 10 ** int(entry["decimals"])
-                out = self._quote_call(product)(entry["address"], self.registry.quote_address, unit, int(entry.get("pool_fee") or self.s.pool_fee_tier))
-                price = from_wei(int(out), qd)
-                cap = price * D(int(supply)) / D(unit)
-                checks.append(Check("market_cap", cap >= floor, f"about ${cap:,.0f}, floor ${floor:,.0f}", str(cap)))
-            except Exception as e:
-                checks.append(Check("market_cap", True, f"could not price the supply: {type(e).__name__}", None))
         return checks
 
     # The wallet a live run trades from. Set by the run; None in paper mode.

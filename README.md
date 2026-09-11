@@ -130,7 +130,7 @@ allowed through the drained pool's wide spread. [Details and limits](docs/safety
 A clean contract in a pool nobody trades is not a trade. A buy asks the pool,
 at that moment, for at least three swaps in the last fifteen minutes with the
 latest under ten minutes old, the price within 25% of the window's high and at
-least $5,000 traded in the last five minutes; a pool the fly cannot read is not
+least $3,000 traded in the last five minutes, whatever its market cap; a pool the fly cannot read is not
 bought. Each tick it looks at the coins it
 holds and the three hottest it does not, so it is watching where people are.
 

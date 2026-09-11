@@ -189,7 +189,6 @@ def settings_from(args, net_key):
         min_recent_swaps=int(os.environ.get("STONKFLYRH_MIN_SWAPS", "5")),
         activity_window_seconds=float(os.environ.get("STONKFLYRH_ACTIVITY_WINDOW_SECONDS", "3600")),
         dead_after_seconds=float(os.environ.get("STONKFLYRH_DEAD_AFTER_SECONDS", "14400")),
-        min_market_cap_usd=os.environ.get("STONKFLYRH_MIN_MARKET_CAP_USD", "10000"),
         max_recent_drawdown=os.environ.get("STONKFLYRH_MAX_DRAWDOWN", "0.6"),
         max_position_usd=os.environ.get("STONKFLYRH_MAX_POSITION_USD", os.environ.get("STONKFLYRH_ORDER_USD", "10")),
         max_open_positions=int(os.environ.get("STONKFLYRH_MAX_OPEN_POSITIONS", "6")),
@@ -200,7 +199,7 @@ def settings_from(args, net_key):
         max_last_swap_age_seconds=float(os.environ.get("STONKFLYRH_MAX_LAST_SWAP_AGE_SECONDS", "600")),
         max_hot_drawdown=os.environ.get("STONKFLYRH_MAX_HOT_DRAWDOWN", "0.25"),
         volume_window_seconds=float(os.environ.get("STONKFLYRH_VOLUME_WINDOW_SECONDS", "300")),
-        min_volume_usd=os.environ.get("STONKFLYRH_MIN_VOLUME_USD", "5000"),
+        min_volume_usd=os.environ.get("STONKFLYRH_MIN_VOLUME_USD", "3000"),
     )
 
 

@@ -531,11 +531,11 @@ def test_closing_a_position_clears_its_rug_reference(tmp_path):
 
 
 def test_the_screen_asks_whether_anyone_is_here(tmp_path):
-    """Activity and market-cap checks: a token with a $2.8K cap and one swap an
-    hour is withheld even when its pool clears the depth floor."""
+    """The activity check: a token with one swap an hour is withheld even when
+    its pool clears the depth floor. Market cap is never asked, however small."""
     from stonkflyrh.safety import RugScreen
 
-    settings = Settings(min_market_cap_usd="10000", min_recent_swaps=5)
+    settings = Settings(min_recent_swaps=5)
     ledger = Ledger(tmp_path / "l.sqlite", settings, "paper", CAPITAL)
     chain = FakePool()
     try:
@@ -550,10 +550,10 @@ def test_the_screen_asks_whether_anyone_is_here(tmp_path):
         entry = {"address": TOKEN, "decimals": 18, "pool_fee": 10000, "total_supply": str(10**9 * 10**18)}
         checks = {c.name: c for c in screen._market("PONS", entry)}
         assert not checks["activity"].passed
-        assert checks["market_cap"].passed and "$247,000" in checks["market_cap"].detail   # net of the fake pool fee
-        # A supply a thousand times smaller is a $250 cap: a graveyard.
+        assert "market_cap" not in checks
+        # A supply a thousand times smaller is a $250 cap; still not a question the screen asks.
         small = {**entry, "total_supply": str(10**6 * 10**18)}
-        assert not {c.name: c for c in screen._market("PONS", small)}["market_cap"].passed
+        assert "market_cap" not in {c.name for c in screen._market("PONS", small)}
     finally:
         ledger.close()
 

@@ -586,7 +586,7 @@ function renderUniverse() {
     const verdict = v ? `<span class="pill ${v.approved ? "ok" : "no"}">${v.approved ? "clear" : "withheld"}</span>` : `<span class="pill">unscreened</span>`;
     // Heat: the pool's last few minutes, what the buy gate reads.
     const h = heatMap[e.symbol];
-    const volFloor = Number(settings.min_volume_usd ?? 5000);
+    const volFloor = Number(settings.min_volume_usd ?? 3000);
     const hot = h && h.swaps >= Number(settings.min_hot_swaps ?? 3) && h.last_swap_age_seconds != null && h.last_swap_age_seconds <= Number(settings.max_last_swap_age_seconds ?? 600) && (volFloor <= 0 || (h.volume_usd != null && h.volume_usd >= volFloor));
     const vol = h && h.volume_usd != null ? `, ${compact(h.volume_usd)}/${Math.round((h.volume_window_seconds || 300) / 60)}m` : "";
     const heat = h ? ` · <span style="color:${hot ? "var(--lime)" : "var(--muted, #888)"}">${h.swaps} swap${h.swaps === 1 ? "" : "s"}/${Math.round(h.window_seconds / 60)}m${h.last_swap_age_seconds == null ? "" : ", last " + Math.round(h.last_swap_age_seconds / 60) + "m ago"}${vol}${hot ? " · hot" : ""}</span>` : "";

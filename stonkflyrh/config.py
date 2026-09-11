@@ -131,12 +131,14 @@ class Settings:
     # -- activity -----------------------------------------------------------
     # A clean contract in a pool nobody trades is not a trade. Buys need this
     # many swaps in the window; a held coin whose pool goes quiet this long is
-    # sold. A market cap under the floor is a graveyard, however deep the pool.
+    # sold. Market cap is never asked: volume and recent activity decide.
     activity_enabled: bool = True
     min_recent_swaps: int = 5
     activity_window_seconds: float = 3600
     dead_after_seconds: float = 14400
-    min_market_cap_usd: str = "10000"
+    # Retired: the screen no longer has a market-cap check. Kept only so the
+    # settings stored in older ledgers still load.
+    min_market_cap_usd: str = "0"
     # A coin far below its recent high is a rug still being traded. The high
     # comes from the pool's own swap events over the window.
     max_recent_drawdown: str = "0.6"
@@ -152,7 +154,7 @@ class Settings:
     # Dollars traded through the pool in the volume window, from the token
     # amounts in its swap events priced at the run's own quote. 0 disables.
     volume_window_seconds: float = 300
-    min_volume_usd: str = "5000"
+    min_volume_usd: str = "3000"
 
     # -- airdrop ------------------------------------------------------------
     # The operator's coin, sent from the deployer wallet to wallets that bought

@@ -167,7 +167,7 @@ def swap_with_amounts(block, amount0, amount1=0):
 def test_a_buy_needs_dollars_through_the_pool_in_the_last_five_minutes(tmp_path):
     """Four swaps of two million tokens each in the last five minutes (1200
     blocks), one earlier that does not count. At $0.001 that is $8,000; at
-    $0.0005 it is $4,000 and the floor is $5,000. TOKEN is the lower address,
+    $0.0002 it is $1,600 and the floor is $3,000. TOKEN is the lower address,
     so it is currency0 and amount0 is the token leg."""
     unit = 10**18
     logs = [swap_with_amounts(98_000, 50_000_000 * unit)] + [
@@ -181,8 +181,8 @@ def test_a_buy_needs_dollars_through_the_pool_in_the_last_five_minutes(tmp_path)
         assert ok and "$8,000 in the last 5 min" in why
         assert ledger.get("heat")["WOOF"]["volume_usd"] == pytest.approx(8000.0)
         monitor._cache.clear()
-        ok, why = monitor.buyable("WOOF", V4_ENTRY, now=1000.0, price=D("0.0005"))
-        assert not ok and why == "$4,000 traded in the last 5 min, floor $5,000"
+        ok, why = monitor.buyable("WOOF", V4_ENTRY, now=1000.0, price=D("0.0002"))
+        assert not ok and why == "$1,600 traded in the last 5 min, floor $3,000"
         monitor._cache.clear()
         ok, why = monitor.buyable("WOOF", V4_ENTRY, now=1000.0)
         assert not ok and why == "volume in the last 5 min cannot be priced"
@@ -190,7 +190,7 @@ def test_a_buy_needs_dollars_through_the_pool_in_the_last_five_minutes(tmp_path)
         priced = monitor.heat("WOOF", V4_ENTRY, now=1010.0, price=D("0.001"))
         assert priced["volume_usd"] == pytest.approx(8000.0)
         # Thin volume alone keeps a busy pool out of the lineup.
-        assert monitor.warm({**priced, "volume_usd": 4999.0}, now=1010.0) is False
+        assert monitor.warm({**priced, "volume_usd": 2999.0}, now=1010.0) is False
         assert monitor.warm(priced, now=1010.0) is True
     finally:
         ledger.close()
