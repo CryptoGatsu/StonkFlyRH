@@ -424,7 +424,11 @@ class ChainClient:
                     break
                 except Exception as e:
                     text = str(e).lower()
-                    if ("range" in text or "too many" in text or "limit" in text) and chunk > 200:
+                    # "range"/"too many"/"limit": the node caps the block span.
+                    # "413"/"too large": a hosted endpoint caps the reply size.
+                    # Either way a smaller window is the answer.
+                    too_big = any(k in text for k in ("range", "too many", "limit", "413", "too large"))
+                    if too_big and chunk > 200:
                         chunk //= 2
                         end = min(hi, start + chunk - 1)
                         continue

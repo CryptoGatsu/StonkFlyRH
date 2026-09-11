@@ -79,3 +79,21 @@ def test_gas_price_clears_the_current_base_fee_with_headroom():
         "get_block": staticmethod(lambda tag: {}),      # a node without base fees
     })()
     assert c.gas_price() == 250_000_000
+
+
+def test_the_chunk_halves_when_a_hosted_endpoint_refuses_a_large_reply(monkeypatch):
+    """QuickNode answers HTTP 413 when one reply would be too big."""
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    class Capped(Eth):
+        def get_logs(self, q):
+            self.calls.append((q["fromBlock"], q["toBlock"]))
+            if q["toBlock"] - q["fromBlock"] + 1 > 500:
+                raise RuntimeError("413 Client Error: Request Entity Too Large for url: https://x")
+            return [{"blockNumber": q["fromBlock"]}]
+
+    eth = Capped()
+    c = client(eth)
+    out, hi = c.logs({"fromBlock": 1, "toBlock": 1000}, chunk=2000, pause=0)
+    assert hi == 1000 and len(out) == 2
+    assert eth.calls[-1][1] - eth.calls[-1][0] + 1 <= 500
