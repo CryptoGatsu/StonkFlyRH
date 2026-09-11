@@ -1483,6 +1483,11 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
         if side != "HOLD":
             try:
                 fresh = market.snapshot(limits["order_limit"])
+                # A pool that would not quote a moment ago will not quote now
+                # either: carry the tick's written-off quotes over so the
+                # snapshot stays complete and the guard can judge this order.
+                for missing in set(quotes) - set(fresh):
+                    fresh[missing] = quotes[missing]
                 latest = fresh[product]
                 tolerance = guard.move_tolerance(product, side)
                 if abs(latest.bid - q.bid) / q.bid > tolerance:
