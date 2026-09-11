@@ -1487,8 +1487,11 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
             json.dumps(
                 {
                     "tick": row["tick"],
+                    "product": product,
                     "side": neural["side"],
                     "execution": order["status"],
+                    **({"reason": str(order.get("reason"))[:200]} if order.get("reason") else {}),
+                    **({"forced": forced} if forced else {}),
                     "equity_usd": row["equity_usd"],
                     "eth_usd": row["eth_usd"],
                     "stimulus": kind,
