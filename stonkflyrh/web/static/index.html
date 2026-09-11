@@ -723,6 +723,12 @@ function renderState(s) {
 }
 
 /* ---------------- rows ---------------- */
+function xPostFor(ref) {
+  // The URL of the fly's post about a trade, when one went out.
+  if (!ref) return null;
+  const hit = (meta.x_posts || []).find((p) => p && p.kind === "trade" && p.ref === ref && p.status === "posted" && p.url);
+  return hit ? hit.url : null;
+}
 function tradeRow(row, fresh) {
   const ex = row.execution || {}, n = row.neural || {}, q = row.quote || {}, side = n.side;
   const filled = ex.status === "FILLED" || ex.status === "SETTLED";
@@ -733,6 +739,8 @@ function tradeRow(row, fresh) {
   const fee = ex.fee_wei ? Number(ex.fee_wei) / 10 ** qd : 0;
   const mark = side === "BUY" ? q.ask : q.bid;
   const link = ex.tx_hash && explorer ? ` <a href="${esc(explorer)}/tx/${esc(ex.tx_hash)}" target="_blank" rel="noopener">${shortHash(ex.tx_hash)}</a>` : "";
+  const post = xPostFor(ex.tx_hash || ex.client_order_id);
+  const postLink = post ? ` <a href="${esc(post)}" target="_blank" rel="noopener" title="The fly's post about this trade">𝕏</a>` : "";
   const realized = side === "SELL" && row.pnl_delta_usd ? signed(row.pnl_delta_usd) : "—";
   const tr = document.createElement("tr"); if (fresh) tr.className = "fresh";
   if (side === "BUY" && Number.isFinite(units) && units > 0) {
@@ -740,7 +748,7 @@ function tradeRow(row, fresh) {
     tr.dataset.product = row.product; tr.dataset.units = String(units); tr.dataset.cost = String(value + fee);
   }
   tr.innerHTML = `<td>${clock(row.wall_time)}<span class="k">#${esc(row.tick)}</span></td>
-    <td><span class="side ${esc(side)}">${esc(side)} ${esc(row.product)}</span><span class="k">${qty(units)} @ ${usd(mark, 8)}${Number.isFinite(marketCap(row.product, Number(mark))) ? " · MC " + compact(marketCap(row.product, Number(mark))) : ""}${link}${tokenLinks((meta.universe && meta.universe[row.product] && meta.universe[row.product].address) || (meta.dropped && meta.dropped[row.product] && meta.dropped[row.product].address) || "")}</span></td>
+    <td><span class="side ${esc(side)}">${esc(side)} ${esc(row.product)}</span><span class="k">${qty(units)} @ ${usd(mark, 8)}${Number.isFinite(marketCap(row.product, Number(mark))) ? " · MC " + compact(marketCap(row.product, Number(mark))) : ""}${link}${postLink}${tokenLinks((meta.universe && meta.universe[row.product] && meta.universe[row.product].address) || (meta.dropped && meta.dropped[row.product] && meta.dropped[row.product].address) || "")}</span></td>
     <td class="r">${usd(value)}</td><td class="r">${fee ? usd(fee) : "—"}</td>
     <td class="r pnl ${side === "SELL" && Number(row.pnl_delta_usd) < 0 ? "SELL" : "BUY"}">${realized}</td>`;
   const body = $("trades"); body.prepend(tr); while (body.children.length > 40) body.lastElementChild.remove();

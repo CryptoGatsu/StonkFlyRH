@@ -51,6 +51,15 @@ to contracts, routers, pools, its own wallets or a wallet already dropped. Amoun
 wallets per round, cadence, a daily cap and a reserve are settings. Paper runs only
 report who would receive. [Details](docs/airdrop.md).
 
+## Posting on X
+
+The fly speaks as [@StonkFlyRH](https://x.com/StonkFlyRH): one post when a trade
+fills (side, size, market cap, the transaction) and one when it leaves a rug or a
+dead pool. Give it an X developer app's key pair and a user access token for the
+account in `.env`; without them each would-be post is recorded in the ledger as a
+dry run, and paper runs never post. `STONKFLYRH_X_POSTING=0` turns it off. A
+failed post is recorded and forgotten; it never touches a trade.
+
 ## Start it
 
 ```sh

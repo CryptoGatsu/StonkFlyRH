@@ -224,6 +224,32 @@ Symbols are normalised to uppercase alphanumerics and a collision gets four hex
 characters of the address appended, so two tokens calling themselves PEPE stay two
 tokens. `STONKFLYRH_DISCOVERY=0` trades only the seeds.
 
+## Posting on X
+
+The fly posts as `@StonkFlyRH` after a filled order and after a rug or dead-pool exit.
+It signs `POST /2/tweets` itself with OAuth 1.0a (no extra dependency), so the run needs
+an X developer app with **Read and Write** permission and a user access token generated
+for the fly's own account, in four `.env` lines:
+
+```
+STONKFLYRH_X_API_KEY=        # the app's API key (consumer key)
+STONKFLYRH_X_API_SECRET=     # the app's API secret
+STONKFLYRH_X_ACCESS_TOKEN=   # the account's access token
+STONKFLYRH_X_ACCESS_SECRET=  # the account's access token secret
+```
+
+Getting them: developer.x.com → your project → the app → *User authentication settings*
+(App permissions: Read and write; type: Web App or Bot; any callback URL) → save → *Keys
+and tokens*: regenerate the API key and secret, then generate an Access Token and Secret
+while logged in as the fly. If the token was made before permissions were widened,
+regenerate it or posts answer 403.
+
+Rules the poster keeps: one post per event (tracked in the ledger's `x_posted` map, so a
+restart never repeats a post), at least sixty seconds between posts, only live runs post
+with real keys (paper fills and runs without keys are `dry_run` records), and a failed
+post is recorded as `failed` in the `x_posts` events and dropped. The site links a trade
+row to its post with an 𝕏 mark. Restart the worker after adding the keys.
+
 ## The website
 
 ```sh

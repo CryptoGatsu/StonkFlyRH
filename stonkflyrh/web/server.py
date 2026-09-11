@@ -82,6 +82,12 @@ def read_meta(out):
                 "SELECT payload FROM events WHERE kind='airdrops' ORDER BY id DESC LIMIT 5"
             )
         ]
+        x_posts = [
+            json.loads(r[0])
+            for r in db.execute(
+                "SELECT payload FROM events WHERE kind='x_posts' ORDER BY id DESC LIMIT 40"
+            )
+        ]
         payouts = [
             {
                 "created": r[0],
@@ -113,6 +119,7 @@ def read_meta(out):
     meta["donor_events"] = donor_events
     meta["airdrops"] = airdrops
     meta["airdrop_events"] = airdrop_events
+    meta["x_posts"] = x_posts
     return meta
 
 

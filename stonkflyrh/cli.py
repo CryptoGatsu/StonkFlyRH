@@ -1105,6 +1105,14 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         activity = ActivityMonitor(settings, client, registry, ledger)
         screen.activity = activity
     watch = RugWatch(settings, ledger, screen)
+    poster = None
+    if os.environ.get("STONKFLYRH_X_POSTING", "1") == "1" and not a.fixture:
+        # The fly's voice on X. Without keys every would-be post is a dry run
+        # written to the ledger, so the wording is visible before going live.
+        from .social import XPoster, credentials_from_env
+
+        # Paper fills are not news: only a live run speaks with real keys.
+        poster = XPoster(ledger, explorer=net.explorer, creds=credentials_from_env() if a.live else None)
     if a.fixture:
         discovery = FixtureDiscovery(settings, ledger, market) if settings.discovery_enabled else None
     else:
@@ -1154,6 +1162,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             "fee": fee_wallet(),
         },
         "screen": {"enabled": screen is not None},
+        "x": {"enabled": poster is not None, "live": poster is not None and poster.live, "handle": "StonkFlyRH"},
         "airdrop": {
             "enabled": airdrop is not None,
             "dry_run": airdrop is not None and airdrop.account is None,
@@ -1228,7 +1237,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         watchdog.begin()
         try:
             _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, provider,
-                  action, controller, screen, watch, discovery, donations, airdrop, activity)
+                  action, controller, screen, watch, discovery, donations, airdrop, activity, poster)
             failures = 0
         except Exception as e:
             # A trade in flight is never covered by this: the broker raises its
@@ -1344,8 +1353,37 @@ class _SlowTickWatchdog:
             self.reported = True
 
 
+def _market_cap(entry, mid):
+    """price × total supply, in dollars, or None when the supply is unknown."""
+    supply = (entry or {}).get("total_supply")
+    if not supply:
+        return None
+    try:
+        return D(mid) * D(str(supply)) / D(10 ** int(entry.get("decimals", 18)))
+    except Exception:
+        return None
+
+
+def _say_on_x(poster, row, rug, ledger, q):
+    """After the row is on disk: a filled order or a rug becomes a post. A
+    failure here is recorded by the poster and never touches the trade."""
+    try:
+        order = row.get("execution") or {}
+        if order.get("status") in ("FILLED", "SETTLED"):
+            side = (row.get("neural") or {}).get("side")
+            entry = ledger.universe().get(row["product"]) or ledger.dropped().get(row["product"]) or {}
+            cap = _market_cap(entry, (D(str(q.bid)) + D(str(q.ask))) / 2)
+            realised = row.get("pnl_delta_usd") if side == "SELL" else None
+            ref = order.get("tx_hash") or order.get("client_order_id") or f"tick:{row['tick']}"
+            poster.post(poster.trade_text(row, market_cap=cap, realised=realised), "trade", ref)
+        if rug:
+            poster.post(poster.rug_text(rug), "rug", f"{rug['product']}:{int(rug.get('at', 0))}")
+    except Exception as e:
+        print(json.dumps({"x_post_skipped": f"{type(e).__name__}: {str(e)[:120]}"}), flush=True)
+
+
 def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, provider,
-          action, controller, screen, watch, discovery, donations, airdrop=None, activity=None):
+          action, controller, screen, watch, discovery, donations, airdrop=None, activity=None, poster=None):
     """One observation: look, decide, maybe trade, record."""
     from PIL import Image
 
@@ -1544,6 +1582,8 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
             os.fsync(f.fileno())
         Image.fromarray(frame).save(out / "latest-input.png")
         (out / "latest.json").write_text(json.dumps(row, indent=2) + "\n")
+        if poster is not None:
+            _say_on_x(poster, row, rug, ledger, q)
 
         print(
             json.dumps(
