@@ -1037,10 +1037,13 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
     action = provider.get_actions()[0]
     count = 0
     failures = 0
+    watchdog = _SlowTickWatchdog(threshold=180)
+    watchdog.start()
     while not a.steps or count < a.steps:
         started = time.monotonic()
         if (out / "STOP").exists() or ledger.get("halted"):
             break
+        watchdog.begin()
         try:
             _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, provider,
                   action, controller, screen, watch, discovery, donations, airdrop)
@@ -1065,6 +1068,53 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             until = started + settings.interval_seconds
             while time.monotonic() < until and not (out / "STOP").exists():
                 time.sleep(min(1, until - time.monotonic()))
+
+
+class _SlowTickWatchdog:
+    """A tick that runs far past the observation interval is a stall, and a
+    stall with no log line is undiagnosable. Once per slow tick, print where
+    the main thread is, as file:line frames inside this package."""
+
+    def __init__(self, threshold=180, every=30):
+        import threading
+
+        self.threshold = threshold
+        self.every = every
+        self.main = threading.main_thread().ident
+        self.started = None
+        self.reported = False
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="slow-tick-watchdog", daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def begin(self):
+        self.started = time.monotonic()
+        self.reported = False
+
+    def _run(self):
+        import sys
+        import traceback
+
+        root = Path(__file__).parent
+        while not self._stop.wait(self.every):
+            if self.started is None or self.reported:
+                continue
+            elapsed = time.monotonic() - self.started
+            if elapsed < self.threshold:
+                continue
+            frame = sys._current_frames().get(self.main)
+            where = []
+            if frame is not None:
+                for f in traceback.extract_stack(frame):
+                    p = Path(f.filename)
+                    if p.is_relative_to(root):
+                        where.append(f"{p.name}:{f.lineno} {f.name}")
+                    else:
+                        where.append(f"[{p.name}:{f.lineno} {f.name}]")
+            print(json.dumps({"slow_tick_seconds": int(elapsed), "at": where[-12:]}), flush=True)
+            self.reported = True
 
 
 def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, provider,

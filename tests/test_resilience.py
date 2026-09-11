@@ -65,3 +65,20 @@ def test_the_operators_coin_is_admitted_past_the_cap(tmp_path):
         assert "FLYCOIN" in added and len(added) == 2
     finally:
         ledger.close()
+
+
+def test_the_watchdog_reports_where_a_slow_tick_is(capsys, monkeypatch):
+    import time as _time
+
+    from stonkflyrh.cli import _SlowTickWatchdog
+
+    dog = _SlowTickWatchdog(threshold=0, every=0.01)
+    dog.begin()
+    dog.start()
+    deadline = _time.time() + 3
+    while not dog.reported and _time.time() < deadline:
+        _time.sleep(0.02)                     # the main thread is "stuck" here
+    dog._stop.set()
+    out = capsys.readouterr().out
+    assert dog.reported and '"slow_tick_seconds"' in out
+    assert "test_resilience.py" in out or "]" in out   # frames are named, package ones bare

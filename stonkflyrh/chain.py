@@ -433,7 +433,7 @@ class ChainClient:
                     # "413"/"too large": a hosted endpoint caps the reply size.
                     # Either way a smaller window is the answer.
                     too_big = any(k in text for k in ("range", "too many", "limit", "413", "too large"))
-                    if too_big and chunk > 200:
+                    if too_big and chunk > 25:
                         chunk //= 2
                         end = min(hi, start + chunk - 1)
                         continue
