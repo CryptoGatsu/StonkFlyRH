@@ -17,7 +17,7 @@ from tests.test_execution import CAPITAL, ETH_USD, quote
 
 
 def write_run(tmp_path, ticks=3):
-    settings = Settings(protocol_fee_bps=100)
+    settings = Settings(protocol_fee_bps=100, max_position_usd="1000")   # this run buys PONS three times
     ledger = Ledger(tmp_path / "ledger.sqlite", settings, "paper", CAPITAL)
     guard = Guard(settings, ledger, tmp_path / "STOP")
     broker = PaperBroker(settings, ledger, {"trading": "0xaaa"})

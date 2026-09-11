@@ -121,6 +121,13 @@ class Settings:
     max_pool_usd: str = "1000"
     loss_stop_fraction: str = "0.25"
 
+    # -- concentration ------------------------------------------------------
+    # One order's worth per coin, a cap on open positions, and a cooling-off
+    # period before a coin the fly sold can be bought again.
+    max_position_usd: str = "10"
+    max_open_positions: int = 6
+    reentry_cooldown_seconds: float = 21600
+
     # -- activity -----------------------------------------------------------
     # A clean contract in a pool nobody trades is not a trade. Buys need this
     # many swaps in the window; a held coin whose pool goes quiet this long is
@@ -225,6 +232,7 @@ class Settings:
         self._check_donations()
         self._check_airdrop()
         self._check_activity()
+        self._check_concentration()
         self._check_adaptation()
         self._check_neural()
 
@@ -241,6 +249,14 @@ class Settings:
             raise ValueError("Pool cap must hold the operator's stake and stay under $100,000")
         if not D(0) < D(self.loss_stop_fraction) < 1:
             raise ValueError("Loss stop fraction must be between 0 and 1")
+
+    def _check_concentration(self):
+        if D(self.max_position_usd) < D(self.min_order_usd):
+            raise ValueError("max_position_usd must hold at least the minimum order")
+        if type(self.max_open_positions) is not int or not 1 <= self.max_open_positions <= 50:
+            raise ValueError("max_open_positions must be 1-50")
+        if not math.isfinite(self.reentry_cooldown_seconds) or not 0 <= self.reentry_cooldown_seconds <= 30 * 86400:
+            raise ValueError("reentry_cooldown_seconds must be 0 to 30 days")
 
     def _check_activity(self):
         if type(self.activity_enabled) is not bool:

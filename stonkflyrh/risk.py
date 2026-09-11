@@ -164,6 +164,18 @@ class Guard:
         order_limit = limits["order_limit"] * scale
         slip = D(1) - D(self.s.slippage)
         if side == "BUY":
+            # Concentration: one order's worth per coin, a ceiling on how many
+            # coins are held at once, and no re-entry into a coin just sold.
+            held_now = self.l.positions.get(product, D(0))
+            if held_now * q.bid + order_limit > D(self.s.max_position_usd):
+                raise Veto(f"Already holding {product}: position cap ${D(self.s.max_position_usd)}")
+            open_positions = self.l.open_positions()
+            if product not in open_positions and len(open_positions) >= int(self.s.max_open_positions):
+                raise Veto(f"Open positions at the cap of {int(self.s.max_open_positions)}")
+            sold_at = self.l.last_sold_at(product) if hasattr(self.l, "last_sold_at") else None
+            if sold_at is not None and now - float(sold_at) < float(self.s.reentry_cooldown_seconds):
+                waited = (now - float(sold_at)) / 3600
+                raise Veto(f"Sold {product} {waited:.1f}h ago; re-entry waits {float(self.s.reentry_cooldown_seconds) / 3600:.0f}h")
             # A buy is the only thing the screen can stop. It runs before any
             # sizing so a rejected token costs no further work.
             if self.screen is not None:

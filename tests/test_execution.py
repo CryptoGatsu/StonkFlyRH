@@ -652,3 +652,32 @@ def test_a_position_sold_to_nothing_leaves_the_books_and_equity_survives_a_missi
     positions = dict(ledger.get("positions") or {}); positions["GHOST"] = "5"; ledger.put("positions", positions)
     value = ledger.equity({}, ETH_USD)                          # no quotes at all: no raise
     assert value == ledger.cash                                 # nothing added for GHOST, no gas spent
+
+
+def test_the_fly_holds_one_order_per_coin_and_does_not_flip_it(env):
+    settings, ledger, guard = env
+    buy(env)
+    ledger.put("last_attempt", 0)
+    with pytest.raises(Veto, match="Already holding PONS"):
+        guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD)
+    # Sell it all, then try to buy it straight back.
+    ledger.block("PONS", "test exit", time.time())
+    plan = ledger.reserve(guard.plan("PONS", "SELL", {"PONS": quote()}, ETH_USD), time.time())
+    PaperBroker(settings, ledger).execute(plan, guard.before_submit)
+    ledger.db.execute("DELETE FROM blocklist")
+    ledger.put("last_attempt", 0)
+    with pytest.raises(Veto, match="re-entry waits"):
+        guard.plan("PONS", "BUY", {"PONS": quote()}, ETH_USD)
+
+
+def test_open_positions_are_capped(tmp_path):
+    s = Settings(products=("PONS", "WOOF"), max_open_positions=1)
+    ledger = Ledger(tmp_path / "l.sqlite", s, "paper", CAPITAL)
+    guard = Guard(s, ledger, tmp_path / "STOP")
+    try:
+        positions = dict(ledger.get("positions") or {}); positions["PONS"] = "1000"; ledger.put("positions", positions)
+        q = {"PONS": quote(), "WOOF": quote(product="WOOF")}
+        with pytest.raises(Veto, match="Open positions at the cap"):
+            guard.plan("WOOF", "BUY", q, ETH_USD)
+    finally:
+        ledger.close()

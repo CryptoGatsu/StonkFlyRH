@@ -382,11 +382,11 @@ def test_the_screen_blocks_buys_but_never_sells(tmp_path):
     settings, ledger, screen, _ = build(tmp_path, pool=FakePool(sellable=False))
     try:
         guard = Guard(settings, ledger, tmp_path / "STOP", screen)
-        ledger.put("positions", {"PONS": "40000"})
         quotes = {"PONS": quote_for()}
         with pytest.raises(Veto, match="rug screen rejected"):
             guard.plan("PONS", "BUY", quotes, ETH_USD)
         # The way out of a bad token must always stay open.
+        ledger.put("positions", {"PONS": "40000"})
         plan = guard.plan("PONS", "SELL", quotes, ETH_USD)
         assert plan["side"] == "SELL"
     finally:

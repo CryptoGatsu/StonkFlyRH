@@ -185,6 +185,9 @@ def settings_from(args, net_key):
         dead_after_seconds=float(os.environ.get("STONKFLYRH_DEAD_AFTER_SECONDS", "14400")),
         min_market_cap_usd=os.environ.get("STONKFLYRH_MIN_MARKET_CAP_USD", "10000"),
         max_recent_drawdown=os.environ.get("STONKFLYRH_MAX_DRAWDOWN", "0.6"),
+        max_position_usd=os.environ.get("STONKFLYRH_MAX_POSITION_USD", os.environ.get("STONKFLYRH_ORDER_USD", "10")),
+        max_open_positions=int(os.environ.get("STONKFLYRH_MAX_OPEN_POSITIONS", "6")),
+        reentry_cooldown_seconds=float(os.environ.get("STONKFLYRH_REENTRY_COOLDOWN_SECONDS", "21600")),
         crash_window_seconds=float(os.environ.get("STONKFLYRH_CRASH_WINDOW_SECONDS", "21600")),
     )
 

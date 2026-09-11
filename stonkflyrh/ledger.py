@@ -320,6 +320,10 @@ class Ledger:
             booked = self.fees.accrue(cid, basis, p["fee_bps"], now)
             if booked["gross_wei"] != fee_wei:
                 raise RuntimeError("Charged fee does not match the booked accrual")
+            if p["side"] == "SELL":
+                sold = dict(self.get("last_sold") or {})
+                sold[p["product"]] = now
+                self.put("last_sold", sold)
             if p["side"] == "SELL" and positions.get(p["product"], D(0)) == 0:
                 # Position closed; the rug reference for it is no longer live.
                 entries = dict(self.get("entries") or {})
@@ -452,6 +456,12 @@ class Ledger:
             "SELECT payload FROM events WHERE kind=? ORDER BY id DESC LIMIT ?", (kind, limit)
         ).fetchall()
         return [json.loads(r[0]) for r in rows]
+
+    def last_sold_at(self, product):
+        return (self.get("last_sold") or {}).get(product)
+
+    def open_positions(self):
+        return [p for p, v in self.positions.items() if v > 0]
 
     def own_swap_hashes(self):
         """Transaction hashes of the run's own orders, lowercased: activity that
