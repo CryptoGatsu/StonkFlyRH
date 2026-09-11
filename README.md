@@ -21,6 +21,8 @@ These are engineered reinforcement signals, **not modeled pain receptors**. Syna
 changes do not establish that it learns to trade profitably. [Model](docs/model.md) ·
 [Rug screen](docs/safety.md).
 
+The fly posts on X as [@StonkFlyRH](https://x.com/StonkFlyRH).
+
 ## The coin
 
 | | |
