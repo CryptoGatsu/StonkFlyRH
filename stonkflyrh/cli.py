@@ -925,6 +925,8 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         if settings.screen_enabled and not a.fixture
         else None
     )
+    if screen is not None and a.live:
+        screen.wallet = broker.address
     watch = RugWatch(settings, ledger, screen)
     if a.fixture:
         discovery = FixtureDiscovery(settings, ledger, market) if settings.discovery_enabled else None

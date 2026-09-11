@@ -414,13 +414,17 @@ class RobinhoodChainBroker:
     def _ensure_permit2(self, token, amount, gas_price):
         """The Universal Router pulls tokens through Permit2: the token must
         allow Permit2, and Permit2 must allow the router, for this amount."""
-        from .v4 import MAX_UINT48
+        from .v4 import MAX_UINT48, MAX_UINT160
 
+        # Approvals are granted once, at the maximum: Permit2 is the canonical
+        # allowance contract and the Universal Router is Uniswap's; re-approving
+        # per order costs gas every trade and leaves no standing allowance to
+        # simulate a buy with when the screen wants to.
         gas = 0
         erc20 = self.client.erc20(token)
         permit2 = self.v4.permit2_address
         if int(erc20.functions.allowance(self.address, permit2).call()) < amount:
-            tx = erc20.functions.approve(permit2, int(amount)).build_transaction(
+            tx = erc20.functions.approve(permit2, 2**256 - 1).build_transaction(
                 self._tx_fields(gas_price, gas=120000)
             )
             r = self._send(tx, "approve permit2")
@@ -429,7 +433,7 @@ class RobinhoodChainBroker:
         now = int(time.time())
         if allowed < amount or expiration <= now + 60:
             tx = self.v4.build_permit2_approve(
-                token, int(amount), min(MAX_UINT48, now + 3600), self._tx_fields(gas_price, gas=120000)
+                token, MAX_UINT160, MAX_UINT48, self._tx_fields(gas_price, gas=120000)
             )
             r = self._send(tx, "permit2 approve")
             gas += r["gas_used"] * r["effective_gas_price"]
@@ -462,7 +466,14 @@ class RobinhoodChainBroker:
 
                 # The pool or router refused this swap at this moment: a
                 # decision about this order, not a fault in the run.
-                raise Veto(f"swap simulation {describe_revert(e)}") from e
+                why = describe_revert(e)
+                if getattr(e, "data", None) in (None, "", "0x"):
+                    # The primary node dropped the error data; the fallback
+                    # node may still tell us which contract said no.
+                    second = self.client.revert_reason(call, self.address)
+                    if second:
+                        why = f"{why} ({second})"
+                raise Veto(f"swap simulation {why}") from e
             if time.time() - p["quote_timestamp"] > self.s.max_quote_age:
                 raise Veto("Quote expired during simulation")
             before_submit(p)

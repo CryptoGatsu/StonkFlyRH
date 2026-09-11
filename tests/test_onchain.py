@@ -449,3 +449,44 @@ def test_a_swap_the_pool_refuses_in_simulation_is_a_veto_not_a_halt(tmp_path):
         assert not ledger.pending()                        # the order is REJECTED, not open
     finally:
         ledger.close()
+
+
+def test_permit2_approvals_are_granted_once_at_the_maximum(tmp_path):
+    from stonkflyrh.v4 import MAX_UINT48, MAX_UINT160
+
+    client = FakeClient(quote_wei=10**8)
+    client.nonce = lambda _address: 3
+    b, ledger, _ = broker(tmp_path, client)
+    approved = []
+
+    class Erc20:
+        functions = None
+
+    class Fn:
+        def __init__(self, owner):
+            self.owner = owner
+
+        def allowance(self, owner, spender):
+            return type("C", (), {"call": staticmethod(lambda: 0)})()
+
+        def approve(self, spender, amount):
+            approved.append(("erc20", spender, amount))
+            return type("T", (), {"build_transaction": staticmethod(lambda f: {**f, "to": spender})})()
+
+    erc = Erc20()
+    erc.functions = Fn(TRADER)
+    client.erc20 = lambda _address: erc
+    b.v4 = type("V4", (), {
+        "permit2_address": "0x" + "22" * 20,
+        "permit2_allowance": staticmethod(lambda owner, token: (0, 0)),
+        "build_permit2_approve": staticmethod(
+            lambda token, amount, expiration, fields: approved.append(("permit2", amount, expiration)) or {**fields, "to": token}
+        ),
+    })()
+    b._send = lambda tx, label, order_id=None: receipt()
+    try:
+        b._ensure_permit2(TOKEN, 10**6, 10**8)
+        assert approved[0] == ("erc20", "0x" + "22" * 20, 2**256 - 1)
+        assert approved[1] == ("permit2", MAX_UINT160, MAX_UINT48)
+    finally:
+        ledger.close()

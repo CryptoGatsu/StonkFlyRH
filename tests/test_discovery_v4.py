@@ -406,3 +406,103 @@ def test_rejections_from_the_broken_age_check_are_forgotten_and_rescanned(tmp_pa
         assert [a["symbol"] for a in scan["added"]] == ["WOOF"]
     finally:
         ledger.close()
+
+
+# -- the buy itself must simulate on a live run ------------------------------
+
+
+class ExecVenue(StateVenue):
+    """A venue whose router refuses buys of one token with a bare revert."""
+
+    def __init__(self, chain, pools, refuse=()):
+        super().__init__(chain, pools)
+        self.refuse = {checksum(a) for a in refuse}
+        self.simulated = []
+
+    def swap_call(self, route, token_in, amount_in, min_out, deadline):
+        key = route[-1]
+        token = key["currency1"] if checksum(key["currency0"]) == USDG else key["currency0"]
+        venue = self
+
+        class Call:
+            address = PM
+
+            def call(self, tx):
+                venue.simulated.append((token, tx["from"]))
+                if checksum(token) in venue.refuse:
+                    from web3.exceptions import ContractLogicError
+
+                    raise ContractLogicError("execution reverted")
+
+            def _encode_transaction_data(self):
+                return "0x"
+
+        return Call()
+
+
+def test_a_token_whose_buy_reverts_is_withheld_on_a_live_run(tmp_path):
+    logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
+    pools = {v4.pool_id(coin_key()): (10**20, 2**96)}
+    ledger, _, market, disc = build(tmp_path, logs, {COIN: ("WOOF", 18)})
+    venue = ExecVenue(disc.client, pools, refuse=[COIN])
+    market.venue = venue
+    disc.venue = venue
+    disc.screen.wallet = checksum("0x" + "fe" * 20)
+    try:
+        report = disc.scan(time.time(), ETH_USD)
+        assert report["added"] == []
+        reason = report["rejected"][0]["reason"]
+        assert reason.startswith("executable: a buy at the run's order size reverted")
+        assert venue.simulated == [(COIN, disc.screen.wallet)]
+    finally:
+        ledger.close()
+
+
+def test_without_a_wallet_the_buy_is_not_simulated(tmp_path):
+    """Paper runs have no approvals to simulate with; they get no such check."""
+    logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
+    pools = {v4.pool_id(coin_key()): (10**20, 2**96)}
+    ledger, _, market, disc = build(tmp_path, logs, {COIN: ("WOOF", 18)})
+    venue = ExecVenue(disc.client, pools, refuse=[COIN])
+    market.venue = venue
+    disc.venue = venue
+    try:
+        report = disc.scan(time.time(), ETH_USD)
+        assert [a["symbol"] for a in report["added"]] == ["WOOF"]
+        assert venue.simulated == []
+        names = {c["name"] for c in ledger.screen_raw("WOOF")["checks"]}
+        assert "executable" not in names
+    finally:
+        ledger.close()
+
+
+def test_a_missing_allowance_is_not_held_against_the_token(tmp_path):
+    logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
+    pools = {v4.pool_id(coin_key()): (10**20, 2**96)}
+    ledger, _, market, disc = build(tmp_path, logs, {COIN: ("WOOF", 18)})
+
+    class NoAllowance(ExecVenue):
+        def swap_call(self, *a, **k):
+            from web3.exceptions import ContractLogicError
+
+            from stonkflyrh.v4 import revert_names
+
+            sel = next(s for s, sig in revert_names().items() if sig.startswith("InsufficientAllowance"))
+
+            class Call:
+                def call(self, tx):
+                    raise ContractLogicError("execution reverted", data=sel + "00" * 32)
+
+            return Call()
+
+    venue = NoAllowance(disc.client, pools)
+    market.venue = venue
+    disc.venue = venue
+    disc.screen.wallet = checksum("0x" + "fe" * 20)
+    try:
+        report = disc.scan(time.time(), ETH_USD)
+        assert [a["symbol"] for a in report["added"]] == ["WOOF"]
+        check = next(c for c in ledger.screen_raw("WOOF")["checks"] if c["name"] == "executable")
+        assert check["passed"] and "not in place" in check["detail"]
+    finally:
+        ledger.close()

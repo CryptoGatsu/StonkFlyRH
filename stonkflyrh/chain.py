@@ -453,6 +453,29 @@ class ChainClient:
                 _time.sleep(pause)
         return out, hi
 
+    def revert_reason(self, call, sender):
+        """Re-run a bound contract call as a raw eth_call on the fallback node
+        and describe its revert. None when there is no fallback, it did not
+        revert, or it gave no data either."""
+        alt = getattr(self, "_logs_w3", None)
+        if alt is None and not self._switch_logs_provider():
+            return None
+        alt = self._logs_w3
+        try:
+            data = call._encode_transaction_data()
+            to = call.address
+        except Exception:
+            return None
+        try:
+            alt.eth.call({"from": checksum(sender), "to": checksum(to), "data": data})
+            return None
+        except Exception as e:
+            from .v4 import describe_revert
+
+            if getattr(e, "data", None) in (None, "", "0x"):
+                return None
+            return "fallback node: " + describe_revert(e)
+
     def logs_eth(self):
         """The eth namespace that serves eth_getLogs: the main provider until a
         dedicated endpoint refuses the method, then the fallback."""

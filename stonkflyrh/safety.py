@@ -241,7 +241,50 @@ class RugScreen:
             self._ownership(address),
         ]
         checks += self._pool(product, entry, pool, eth_usd)
+        if all(c.passed for c in checks):
+            executable = self._executable(product, entry)
+            if executable is not None:
+                checks.append(executable)
         return checks
+
+    # The wallet a live run trades from. Set by the run; None in paper mode.
+    wallet = None
+
+    def _executable(self, product, entry):
+        """Dry-run the real buy through the router from the trading wallet.
+
+        A quote only simulates the price maths; it never moves tokens. A token
+        whose transfer refuses the router (a honeypot, a blacklist, "trading
+        not open") quotes perfectly and reverts on execution. Only a live run
+        with its approvals in place can ask this; anyone else gets no check.
+        """
+        venue = getattr(self.market, "venue", None)
+        route = entry.get("route")
+        if self.wallet is None or venue is None or not route or not hasattr(venue, "swap_call"):
+            return None
+        if self._venue(product) != "v4":
+            return None
+        from .v4 import describe_revert
+
+        qd = self.registry.quote_decimals
+        amount = to_wei(self.s.order_limit_usd, qd)
+        try:
+            call = venue.swap_call(route, self.registry.quote_address, amount, 0, int(time.time()) + 120)
+            call.call({"from": self.wallet})
+        except Exception as e:
+            names = {c.__name__ for c in type(e).__mro__}
+            if not names & {"ContractLogicError", "ContractCustomError", "ContractPanicError"}:
+                return None  # the network, not the pool, failed to answer
+            why = describe_revert(e)
+            if "Allowance" in why or "InsufficientAllowance" in why or "AllowanceExpired" in why:
+                # No standing approval yet: the run cannot tell, so it does not judge.
+                return Check("executable", True, "approvals not in place yet; buy not simulated", None)
+            if getattr(e, "data", None) in (None, "", "0x") and hasattr(self.client, "revert_reason"):
+                second = self.client.revert_reason(call, self.wallet)
+                if second:
+                    why = f"{why} ({second})"
+            return Check("executable", False, f"a buy at the run's order size {why}", why)
+        return Check("executable", True, "a buy at the run's order size simulates", True)
 
     def _code(self, address):
         has_code = self.client.has_code(address)
