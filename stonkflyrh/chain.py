@@ -341,6 +341,9 @@ class ChainClient:
             "decimals": int(c.functions.decimals().call()),
         }
 
+    def total_supply(self, address):
+        return int(self.erc20(address).functions.totalSupply().call())
+
     # A legacy-priced transaction is refused if the block base fee has risen
     # past its gas price between quoting and inclusion, and on this chain the
     # base fee moves every block. Price a quarter above the higher of the

@@ -128,6 +128,7 @@
   .card .tile { width: 32px; height: 32px; display: grid; place-items: center; font: 700 14px/1 var(--pixel); color: var(--bg); flex: 0 0 auto; }
   .card .sym { font: 700 11px/1 var(--pixel); letter-spacing: .1em; }
   .card .price { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .card .bot.entry { color: var(--muted); font-size: 11px; border-top: 1px dashed var(--line-soft); margin-top: 8px; padding-top: 6px; }
   .card .watching { margin-left: auto; font: 700 8px/1 var(--pixel); letter-spacing: .1em; color: var(--lime); }
   .card .mid { display: flex; justify-content: space-between; align-items: baseline; margin-top: 12px; gap: 8px; }
   .card .mid .v { font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; }
@@ -391,6 +392,24 @@ function tokenLinks(address, opts = {}) {
   return `<span class="tlinks${opts.cls ? " " + opts.cls : ""}">${items.join("")}</span>`;
 }
 
+function compact(v) {
+  const n = Number(v); if (!Number.isFinite(n)) return "—";
+  if (n >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
+  if (n >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
+  return usd(n, 0);
+}
+function marketCap(sym, mid) {
+  // Price × total supply; the worker records supply for every universe token.
+  const e = (meta.universe && meta.universe[sym]) || (meta.dropped && meta.dropped[sym]);
+  if (!e || !e.total_supply || !Number.isFinite(mid)) return NaN;
+  return mid * Number(e.total_supply) / 10 ** Number(e.decimals ?? 18);
+}
+function capOrPrice(sym, mid) {
+  const mc = marketCap(sym, mid);
+  return Number.isFinite(mc) ? `MC ${compact(mc)}` : (Number.isFinite(mid) ? usd(mid, mid < 0.01 ? 8 : 4) : "—");
+}
+
 function tileColor(sym) { let h = 0; for (const c of sym) h = (h * 31 + c.charCodeAt(0)) >>> 0; return TILE_COLORS[h % TILE_COLORS.length]; }
 
 /* ---------------- tabs ---------------- */
@@ -452,17 +471,18 @@ function renderBag() {
       // Not held: one compact row in the watchlist, not a card.
       watch.push(`<div class="w-row${blocked ? " rug" : watching ? " watch" : ""}" title="${esc(sym)}">
         <div class="tile" style="background:${tileColor(sym)}">${esc(sym[0])}</div>
-        <div style="min-width:0"><div class="sym">${esc(sym)}</div><div class="px">${Number.isFinite(mid) ? usd(mid, mid < 0.01 ? 8 : 4) : "—"}${tokenLinks((meta.universe && meta.universe[sym] && meta.universe[sym].address) || "")}</div></div>
+        <div style="min-width:0"><div class="sym">${esc(sym)}</div><div class="px" title="${Number.isFinite(mid) ? usd(mid, 8) + " per coin" : ""}">${capOrPrice(sym, mid)}${tokenLinks((meta.universe && meta.universe[sym] && meta.universe[sym].address) || "")}</div></div>
         ${blocked ? `<span class="eye rug">RUGGED</span>` : watching ? `<span class="eye">WATCHING</span>` : ""}</div>`);
       continue;
     }
     const addr = (meta.universe && meta.universe[sym] && meta.universe[sym].address) || "";
     cards.push(`<div class="card${watching ? " watch" : ""}">
       <div class="top"><div class="tile" style="background:${tileColor(sym)}">${esc(sym[0])}</div>
-        <div><div class="sym">${esc(sym)}${tokenLinks(addr)}</div><div class="price">${Number.isFinite(mid) ? usd(mid, mid < 0.01 ? 8 : 4) : "—"} / coin</div></div>
+        <div><div class="sym">${esc(sym)}${tokenLinks(addr)}</div><div class="price">${capOrPrice(sym, mid)}</div></div>
         ${blocked ? `<span class="watching" style="color:var(--pink)">RUGGED</span>` : watching ? `<span class="watching">WATCHING</span>` : ""}</div>
-      <div class="mid"><span class="v">${held > 0 ? usd(value) : "—"}</span><span class="d ${delta >= 0 ? "up" : "down"}">${Number.isFinite(delta) ? signed(delta) : ""}</span></div>
+      <div class="mid"><span class="v">${held > 0 ? usd(value) : "—"}</span><span class="d ${delta >= 0 ? "up" : "down"}">${Number.isFinite(delta) ? signed(delta) + (Number.isFinite(entry) && entry > 0 ? ` (${((mid / entry - 1) * 100).toFixed(1)}%)` : "") : ""}</span></div>
       <div class="bot"><span>${held > 0 ? qty(held) + " " + esc(sym) : "not held"}</span><span>${held > 0 && Number.isFinite(eq) ? (value / eq * 100).toFixed(1) + "%" : ""}</span></div>
+      ${held > 0 ? `<div class="bot entry"><span>entry ${Number.isFinite(entry) ? usd(entry, 8) : "—"}</span><span>now ${Number.isFinite(mid) ? usd(mid, 8) : "—"}</span></div>` : ""}
     </div>`);
   }
   $("cards").innerHTML = cards.join("");
@@ -669,7 +689,7 @@ function tradeRow(row, fresh) {
   const realized = side === "SELL" && row.pnl_delta_usd ? signed(row.pnl_delta_usd) : "—";
   const tr = document.createElement("tr"); if (fresh) tr.className = "fresh";
   tr.innerHTML = `<td>${clock(row.wall_time)}<span class="k">#${esc(row.tick)}</span></td>
-    <td><span class="side ${esc(side)}">${esc(side)} ${esc(row.product)}</span><span class="k">${qty(units)} @ ${usd(mark, 8)}${link}${tokenLinks((meta.universe && meta.universe[row.product] && meta.universe[row.product].address) || (meta.dropped && meta.dropped[row.product] && meta.dropped[row.product].address) || "")}</span></td>
+    <td><span class="side ${esc(side)}">${esc(side)} ${esc(row.product)}</span><span class="k">${qty(units)} @ ${usd(mark, 8)}${Number.isFinite(marketCap(row.product, Number(mark))) ? " · MC " + compact(marketCap(row.product, Number(mark))) : ""}${link}${tokenLinks((meta.universe && meta.universe[row.product] && meta.universe[row.product].address) || (meta.dropped && meta.dropped[row.product] && meta.dropped[row.product].address) || "")}</span></td>
     <td class="r">${usd(value)}</td><td class="r">${fee ? usd(fee) : "—"}</td>
     <td class="r ${side === "SELL" && Number(row.pnl_delta_usd) < 0 ? "SELL" : "BUY"}">${realized}</td>`;
   const body = $("trades"); body.prepend(tr); while (body.children.length > 100) body.lastElementChild.remove();

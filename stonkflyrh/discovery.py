@@ -512,6 +512,7 @@ class PoolDiscovery:
             "source": "factory:PoolCreated" if venue == "v3" else "v4:Initialize",
             "discovered_block": created["block"],
             "added_at": now,
+            "total_supply": self._total_supply(address),
         }
         self.registry.add_token(entry)
         self.market.add_product(symbol, entry["pool"], entry["pool_fee"], venue, entry.get("route"))
@@ -586,11 +587,23 @@ class PoolDiscovery:
             self.l.put("dropped", dropped)
         return back
 
+    def _total_supply(self, address):
+        """The token's supply, as a string of wei, so the site can show market
+        cap rather than a price with seven zeros. None when unreadable."""
+        try:
+            return str(int(self.client.total_supply(address)))
+        except Exception:
+            return None
+
     def prune(self, now, eth_usd):
         """Drop an unheld discovered token that no longer clears the screen."""
         dropped = []
         held = self.l.positions
         for symbol, entry in list(self.l.universe().items()):
+            if not entry.get("total_supply") and entry.get("address"):
+                supply = self._total_supply(entry["address"])
+                if supply:
+                    self.l.add_to_universe({**entry, "total_supply": supply})
             if entry.get("source") == "seed" or held.get(symbol, D(0)) > 0:
                 continue
             verdict = self.screen.assess(symbol, entry["pool"], eth_usd, now)

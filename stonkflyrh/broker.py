@@ -423,7 +423,9 @@ class RobinhoodChainBroker:
         gas = 0
         erc20 = self.client.erc20(token)
         permit2 = self.v4.permit2_address
-        if int(erc20.functions.allowance(self.address, permit2).call()) < amount:
+        # Anything short of a standing maximum is topped up now, so a first
+        # exact-amount approval cannot be spent by one trade and strand the next.
+        if int(erc20.functions.allowance(self.address, permit2).call()) < max(amount, 2**128):
             tx = erc20.functions.approve(permit2, 2**256 - 1).build_transaction(
                 self._tx_fields(gas_price, gas=120000)
             )
@@ -431,7 +433,7 @@ class RobinhoodChainBroker:
             gas += r["gas_used"] * r["effective_gas_price"]
         allowed, expiration = self.v4.permit2_allowance(self.address, token)
         now = int(time.time())
-        if allowed < amount or expiration <= now + 60:
+        if allowed < max(amount, 2**128) or expiration <= now + 86400:
             tx = self.v4.build_permit2_approve(
                 token, MAX_UINT160, MAX_UINT48, self._tx_fields(gas_price, gas=120000)
             )

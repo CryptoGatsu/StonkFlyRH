@@ -277,6 +277,17 @@ class RugScreen:
 
         qd = self.registry.quote_decimals
         amount = to_wei(self.s.order_limit_usd, qd)
+        # The dry-run can only mean something with approvals in place; the buy
+        # path grants them, and it runs after this check. Ask directly rather
+        # than read a missing approval as the token's fault.
+        try:
+            erc20 = self.client.erc20(self.registry.quote_address)
+            allowance = int(erc20.functions.allowance(self.wallet, venue.permit2_address).call())
+            permitted, expiration = venue.permit2_allowance(self.wallet, self.registry.quote_address)
+            if allowance < amount or permitted < amount or expiration <= int(time.time()) + 60:
+                return Check("executable", True, "approvals not in place yet; buy not simulated", None)
+        except Exception:
+            pass
         try:
             call = venue.swap_call(route, self.registry.quote_address, amount, 0, int(time.time()) + 120)
             call.call({"from": self.wallet})
@@ -285,8 +296,8 @@ class RugScreen:
             if not names & {"ContractLogicError", "ContractCustomError", "ContractPanicError"}:
                 return None  # the network, not the pool, failed to answer
             why = describe_revert(e)
-            if "Allowance" in why or "InsufficientAllowance" in why or "AllowanceExpired" in why:
-                # No standing approval yet: the run cannot tell, so it does not judge.
+            if any(k in why for k in ("Allowance", "TRANSFER_FROM_FAILED", "InsufficientAllowance", "AllowanceExpired")):
+                # The wallet's approvals, not the token: the run cannot tell, so it does not judge.
                 return Check("executable", True, "approvals not in place yet; buy not simulated", None)
             if getattr(e, "data", None) in (None, "", "0x") and hasattr(self.client, "revert_reason"):
                 second = self.client.revert_reason(call, self.wallet)
