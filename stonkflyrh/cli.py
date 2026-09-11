@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 
 from .chain import NETWORKS, network
-from .config import D, Settings
+from .config import D, Settings, to_wei
 from .wallet import FLY_WALLET, coin_address
 
 
@@ -75,6 +75,12 @@ def build_parser():
     airdrop.add_argument("--send", action="store_true", help="Sign and send one round from the deployer wallet")
     airdrop.add_argument("--network", choices=sorted(NETWORKS), default=None)
     airdrop.add_argument("--tokens", type=Path)
+
+    probe = sub.add_parser("probe", help="Simulate a buy of one universe token and trace what refuses it")
+    probe.add_argument("--out", type=Path, default=Path("runs/live"))
+    probe.add_argument("--product", required=True, help="Symbol as shown on the site, e.g. MIDORU")
+    probe.add_argument("--network", choices=sorted(NETWORKS), default=None)
+    probe.add_argument("--tokens", type=Path)
 
     resume = sub.add_parser("resume", help="Clear a halt after review, when no order is unresolved")
     resume.add_argument("--out", type=Path, default=Path("runs/live"))
@@ -576,6 +582,107 @@ def cmd_airdrop(a):
         print(json.dumps({**report, "history": airdrop.history(10)}, indent=2, default=str))
     finally:
         ledger.close()
+
+
+def cmd_probe(a):
+    """Everything about one buy that the run itself cannot show: the quote,
+    the exact router call, the revert on each endpoint, and a call trace to
+    the contract that refused. Reads only; signs nothing."""
+    import re
+
+    from .ledger import Ledger
+    from .chain import checksum
+    from .v4 import V4Venue, describe_revert
+    from .wallet import address as wallet_address
+
+    redact = lambda text: re.sub(r"https?://\S+", "[rpc]", str(text))
+
+    def failure(e):
+        data = getattr(e, "data", None)
+        if isinstance(data, dict):
+            data = data.get("data") or data.get("message")
+        return {"type": type(e).__name__, "message": redact(getattr(e, "message", None) or (e.args[0] if e.args else ""))[:300],
+                "data": (str(data)[:200] if data else None), "decoded": describe_revert(e)}
+
+    settings, meta = run_settings(a.out)
+    net, client, registry, verified = chain_context(a.network, a.tokens, [])
+    ledger = Ledger(a.out / "ledger.sqlite", settings, meta["mode"])
+    try:
+        entry = ledger.universe().get(a.product.upper())
+    finally:
+        ledger.close()
+    if not entry:
+        raise SystemExit(f"{a.product} is not in the universe; see the UNIVERSE tab for symbols")
+    if entry.get("venue") != "v4" or not entry.get("route"):
+        raise SystemExit(f"{a.product} is a {entry.get('venue')} token; this probe covers v4 routes")
+    venue = V4Venue(client, registry)
+    fly = checksum(wallet_address("trading") or FLY_WALLET)
+    quote = registry.quote_address
+    amount = to_wei(settings.order_limit_usd, registry.quote_decimals)
+    report = {"product": a.product.upper(), "token": entry["address"], "route_hops": len(entry["route"]),
+              "via": entry.get("via"), "hooks": entry.get("hooks"), "amount_in_usdg": str(settings.order_limit_usd),
+              "fly_wallet": fly}
+    # 1. the quote the run relies on
+    try:
+        out = venue.quote_path(entry["route"], quote, amount)
+        report["quote_out_wei"] = str(out)
+    except Exception as e:
+        report["quote"] = failure(e)
+    # 2. standing approvals
+    try:
+        usdg = client.erc20(quote)
+        report["usdg_balance_wei"] = str(int(usdg.functions.balanceOf(fly).call()))
+        report["usdg_allowance_to_permit2_wei"] = str(int(usdg.functions.allowance(fly, venue.permit2_address).call()))
+        allowed, expiration = venue.permit2_allowance(fly, quote)
+        report["permit2_allowance_to_router"] = {"amount_wei": str(allowed), "expiration": expiration, "now": int(time.time())}
+    except Exception as e:
+        report["approvals"] = failure(e)
+    # 3. the exact call the run would sign, simulated on each endpoint
+    call = venue.swap_call(entry["route"], quote, amount, 0, int(time.time()) + 600)
+    data = call._encode_transaction_data()
+    tx = {"from": fly, "to": venue.router_address, "data": data}
+    report["router"] = venue.router_address
+    report["calldata_bytes"] = (len(data) - 2) // 2
+    report["selector"] = data[:10]
+    endpoints = {"primary": client.w3}
+    try:
+        from web3 import HTTPProvider, Web3
+
+        if os.environ.get("STONKFLYRH_RPC_URL"):
+            endpoints["public"] = Web3(HTTPProvider(net.rpc, request_kwargs={"timeout": 20}))
+    except Exception:
+        pass
+    report["simulation"] = {}
+    for name, w3 in endpoints.items():
+        try:
+            w3.eth.call(tx)
+            report["simulation"][name] = {"ok": True}
+        except Exception as e:
+            report["simulation"][name] = failure(e)
+        # From a wallet with no approvals: a different error here means the
+        # fly's own call got past the allowance checks before failing.
+        try:
+            w3.eth.call({**tx, "from": "0x" + "de" * 20})
+            report["simulation"][name + "_no_approvals"] = {"ok": True}
+        except Exception as e:
+            report["simulation"][name + "_no_approvals"] = failure(e)["decoded"]
+    # 4. a call trace, where the node offers one: the deepest frame that failed
+    report["trace"] = {}
+    for name, w3 in endpoints.items():
+        try:
+            trace = w3.manager.request_blocking("debug_traceCall", [tx, "latest", {"tracer": "callTracer"}])
+        except Exception as e:
+            report["trace"][name] = {"unavailable": redact(e)[:160]}
+            continue
+        path = []
+        node = trace
+        while isinstance(node, dict):
+            path.append({k: (node.get(k)[:74] if isinstance(node.get(k), str) else node.get(k))
+                         for k in ("to", "type", "error", "revertReason", "output") if node.get(k) is not None})
+            calls = [c for c in (node.get("calls") or []) if c.get("error") or c.get("revertReason")]
+            node = calls[-1] if calls else None
+        report["trace"][name] = path[-6:]
+    print(json.dumps(report, indent=2, default=str))
 
 
 def cmd_resume(a):
@@ -1323,6 +1430,7 @@ def main():
         "discovery": cmd_discovery,
         "airdrop": cmd_airdrop,
         "resume": cmd_resume,
+        "probe": cmd_probe,
         "preview": cmd_preview,
         "serve": cmd_serve,
         "status": cmd_status,
