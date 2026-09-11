@@ -626,3 +626,14 @@ def test_resume_clears_a_reviewed_halt_but_not_a_financial_stop(tmp_path):
     (tmp_path / "error.json").write_text(_json.dumps({"reason": "Loss stop: equity fell"}))
     with pytest.raises(RuntimeError, match="financial stop"):
         cmd_resume(SimpleNamespace(out=tmp_path))
+
+
+def test_leaving_a_rug_sells_the_whole_position_not_a_slice(env):
+    """A slice the size of one order would strand dust below the minimum."""
+    settings, ledger, guard = env
+    ledger.put("last_attempt", 0)
+    # Hold far more than one order's worth by fiat, then block the token.
+    positions = dict(ledger.get("positions") or {}); positions["PONS"] = "5000000"; ledger.put("positions", positions)
+    ledger.block("PONS", "dead pool", time.time())
+    exit_plan = guard.plan("PONS", "SELL", {"PONS": quote()}, ETH_USD)
+    assert D(exit_plan["amount_in_wei"]) == to_wei(D(positions["PONS"]), 18)

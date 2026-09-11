@@ -183,7 +183,9 @@ class Guard:
             held = self.l.positions.get(product, D(0))
             # An exit is never scaled down by volatility and never capped by a
             # screen: getting out of a bad token is the one thing that must work.
-            size = min(held, limits["order_limit"] / q.ask)
+            # Leaving a rug or a dead pool sells the whole position at once;
+            # a slice would strand dust that can never clear the minimum.
+            size = held if self.exiting_a_rug(product, side) else min(held, limits["order_limit"] / q.ask)
             amount_in_wei = to_wei(size, q.base_decimals)
             if amount_in_wei <= 0:
                 raise Veto("No position to sell")

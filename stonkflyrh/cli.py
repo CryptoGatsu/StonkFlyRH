@@ -1393,6 +1393,10 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
             # happens this tick, not whenever its turn comes round.
             for held_product, amount in ledger.positions.items():
                 if amount > 0 and held_product in quotes:
+                    # Dust below the minimum order can never be sold; it is
+                    # not a position worth jumping the rotation for.
+                    if amount * quotes[held_product].bid < limits["min_order"]:
+                        continue
                     try:
                         why = activity.exit_reason(
                             held_product, ledger.universe().get(held_product, {}), amount, time.time()
@@ -1460,10 +1464,11 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
         screen_json = None
         side = neural["side"]
         forced = None
-        if activity is not None:
+        if activity is not None and ledger.positions.get(product, D(0)) * q.bid >= limits["min_order"]:
             # A held coin whose pool has gone quiet is left, whatever the brain
             # says: nobody will take the other side later. Blocklisting it
             # widens the exit spread the way a rug does and stops a re-buy.
+            # Dust under the minimum order is not a position to leave.
             try:
                 forced = activity.exit_reason(
                     product, ledger.universe().get(product, {}), ledger.positions.get(product, D(0)), time.time()
