@@ -127,6 +127,12 @@ If a held token collapses anyway, it is blocklisted for the run, the fly takes t
 longer aversive pulse, the screen tightens for everything after it, and the exit is
 allowed through the drained pool's wide spread. [Details and limits](docs/safety.md).
 
+A clean contract in a pool nobody trades is not a trade. A buy asks the pool,
+at that moment, for at least three swaps in the last fifteen minutes with the
+latest under ten minutes old and the price within 25% of the window's high; a
+pool the fly cannot read is not bought. Each tick it looks at the coins it
+holds and the three hottest it does not, so it is watching where people are.
+
 ## Run it
 
 Python 3.11 or newer, a C++17 compiler, macOS/Linux. Allow several GB for the dataset and

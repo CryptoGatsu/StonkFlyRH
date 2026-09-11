@@ -580,16 +580,20 @@ function renderUniverse() {
   const entries = Object.values(universe).sort((a, b) => (b.added_at || 0) - (a.added_at || 0));
   $("n-universe").textContent = entries.length;
   if (!entries.length) { $("universe").innerHTML = `<div class="empty">No tokens in the universe yet.</div>`; return; }
-  const screens = meta.screens || {};
+  const screens = meta.screens || {}, heatMap = meta.heat || {};
   const rows = entries.map((e) => {
     const v = screens[e.symbol];
     const verdict = v ? `<span class="pill ${v.approved ? "ok" : "no"}">${v.approved ? "clear" : "withheld"}</span>` : `<span class="pill">unscreened</span>`;
+    // Heat: the pool's last few minutes, what the buy gate reads.
+    const h = heatMap[e.symbol];
+    const hot = h && h.swaps >= Number(settings.min_hot_swaps ?? 3) && h.last_swap_age_seconds != null && h.last_swap_age_seconds <= Number(settings.max_last_swap_age_seconds ?? 600);
+    const heat = h ? ` · <span style="color:${hot ? "var(--lime)" : "var(--muted, #888)"}">${h.swaps} swap${h.swaps === 1 ? "" : "s"}/${Math.round(h.window_seconds / 60)}m${h.last_swap_age_seconds == null ? "" : ", last " + Math.round(h.last_swap_age_seconds / 60) + "m ago"}${hot ? " · hot" : ""}</span>` : "";
     const venue = e.venue === "v4" ? (e.via ? `v4 via ${esc(e.via)}` : "v4") : e.venue === "v3" ? "v3" : "";
     const src = (e.source === "seed" ? "seed" : e.source === "fixture" ? "discovered (fixture)" : "discovered") + (venue ? " · " + venue : "");
     const when = e.added_at ? " · " + ago(e.added_at) : "";
     const link = e.address && explorer ? `<a href="${esc(explorer)}/address/${esc(e.address)}" target="_blank" rel="noopener">${shortHash(e.address)}</a>` : (e.address ? shortHash(e.address) : "");
     return `<div class="u-row"><div><b>${esc(e.symbol)}</b>${e.name && e.name !== e.symbol ? ` <span class="k" style="display:inline">${esc(e.name)}</span>` : ""}
-      <div class="k">${src}${when}${link ? " · " + link : ""}${e.pool_fee ? " · " + (e.pool_fee / 10000) + "% pool" : ""}${tokenLinks(e.address)}</div></div>${verdict}</div>`;
+      <div class="k">${src}${when}${link ? " · " + link : ""}${e.pool_fee ? " · " + (e.pool_fee / 10000) + "% pool" : ""}${heat}${tokenLinks(e.address)}</div></div>${verdict}</div>`;
   });
   const scans = meta.discovery || [];
   const last = scans[0];

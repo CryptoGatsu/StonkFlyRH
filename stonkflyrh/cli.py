@@ -189,6 +189,10 @@ def settings_from(args, net_key):
         max_open_positions=int(os.environ.get("STONKFLYRH_MAX_OPEN_POSITIONS", "6")),
         reentry_cooldown_seconds=float(os.environ.get("STONKFLYRH_REENTRY_COOLDOWN_SECONDS", "21600")),
         crash_window_seconds=float(os.environ.get("STONKFLYRH_CRASH_WINDOW_SECONDS", "21600")),
+        hot_window_seconds=float(os.environ.get("STONKFLYRH_HOT_WINDOW_SECONDS", "900")),
+        min_hot_swaps=int(os.environ.get("STONKFLYRH_MIN_HOT_SWAPS", "3")),
+        max_last_swap_age_seconds=float(os.environ.get("STONKFLYRH_MAX_LAST_SWAP_AGE_SECONDS", "600")),
+        max_hot_drawdown=os.environ.get("STONKFLYRH_MAX_HOT_DRAWDOWN", "0.25"),
     )
 
 
@@ -1224,6 +1228,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
     (out / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
 
     guard = Guard(settings, ledger, out / "STOP", screen)
+    guard.activity = activity
     provider = StonkflyRHActions(guard, broker, net.key)
     action = provider.get_actions()[0]
     count = 0
@@ -1353,6 +1358,46 @@ class _SlowTickWatchdog:
             self.reported = True
 
 
+def _pick_product(observable, ledger, activity, settings, now):
+    """What the fly looks at this tick. Held coins always take their turn: a
+    sell needs looking. Unheld coins take theirs only while their pool is
+    warm by its last heat reading, hottest few first, so the brain is shown
+    markets with people in them. One unread or oldest reading is refreshed
+    each tick, so the map never goes stale and the chain is asked once."""
+    tick = int(ledger.get("tick") or 0)
+    if activity is None or not settings.activity_enabled:
+        return observable[tick % len(observable)]
+    positions = ledger.positions
+    universe = ledger.universe()
+    held = [p for p in observable if positions.get(p, D(0)) > 0]
+    unheld = [p for p in observable if p not in held]
+    heat = dict(ledger.get("heat") or {})
+    if unheld:
+        due = min(unheld, key=lambda p: (heat.get(p) or {}).get("checked_at", 0))
+        if now - (heat.get(due) or {}).get("checked_at", 0) >= activity.HEAT_CACHE_SECONDS:
+            try:
+                fresh = activity.heat(due, universe.get(due, {}), now)
+            except Exception:
+                fresh = None
+            if fresh:
+                heat[due] = fresh
+    # A reading older than a full lap of the universe says nothing about now.
+    stale = max(600.0, 2 * float(settings.interval_seconds) * max(1, len(observable)))
+    hot = sorted(
+        (p for p in unheld if activity.warm(heat.get(p), now, stale)),
+        key=lambda p: (-heat[p]["swaps"], heat[p]["last_swap_age_seconds"]),
+    )[:3]
+    lineup = held + hot
+    if lineup:
+        return lineup[tick % len(lineup)]
+    # Nothing warm: watch the liveliest pool there is so the brain still sees
+    # a market. The buy gate, not this choice, decides whether it is bought.
+    known = [p for p in unheld if heat.get(p)]
+    if known:
+        return max(known, key=lambda p: (heat[p]["swaps"], -(heat[p]["last_swap_age_seconds"] or 0)))
+    return observable[tick % len(observable)]
+
+
 def _market_cap(entry, mid):
     """price × total supply, in dollars, or None when the supply is unknown."""
     supply = (entry or {}).get("total_supply")
@@ -1428,7 +1473,7 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
         market.record(quotes)
         # A written-off coin has nothing to observe; rotate over the live ones.
         observable = [p for p in universe if p not in written_off] or universe
-        product = observable[ledger.get("tick") % len(observable)]
+        product = _pick_product(observable, ledger, activity, settings, time.time())
         if activity is not None:
             # A held coin whose pool has died jumps the rotation: the exit
             # happens this tick, not whenever its turn comes round.

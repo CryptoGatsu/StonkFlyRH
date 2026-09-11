@@ -29,6 +29,23 @@ reputation service, no allowlist, no score from anywhere else.
 | `transfer_tax` | round trip of a tiny probe, minus twice the pool fee, halved | above the ceiling (default 5% per side) |
 | `price_impact` | round trip at the run's order size minus the tiny probe's | above the ceiling (default 3%) |
 
+## Heat, at the moment of a buy
+
+The screen's verdict is cached for `screen_ttl_seconds` (15 minutes), and its
+`activity` check accepts five swaps spread over an hour. A pool can pass both
+and still be empty by the time the brain says buy. So a buy asks the pool
+itself, fresh, about the last `hot_window_seconds` (15 minutes): at least
+`min_hot_swaps` (3) swaps, the last one no older than `max_last_swap_age_seconds`
+(10 minutes), and the price no more than `max_hot_drawdown` (25%) below the
+window's high. The fly's own swaps do not count. A pool whose events cannot be
+read is not bought: for a buy, unknown means no.
+
+The same reading steers attention. Each tick the fly refreshes one coin's heat
+and looks at its held coins plus the three hottest unheld ones, so the brain is
+shown markets with people in them rather than every pool in turn. When nothing
+is warm it watches the liveliest pool it knows of, and the gate above decides.
+The watchlist on the site shows each coin's heat and marks the hot ones.
+
 The last two are one measurement taken at two sizes. A probe a thousandth of
 the order carries almost no price impact, so what it loses beyond the pool fee
 is the token's transfer tax. The full-size probe loses that plus impact. The

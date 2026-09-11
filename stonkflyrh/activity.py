@@ -13,6 +13,7 @@ floor for buying; the tick uses the silence as a reason to leave.
 import time
 
 from .chain import checksum
+from .config import D
 
 SWAP_V4 = "Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)"
 SWAP_V3 = "Swap(address,address,int256,int256,uint160,uint128,int24)"
@@ -157,24 +158,120 @@ class ActivityMonitor:
             "topics": [self.topic_v4, entry["pool"]],
         }
         logs, _ = self.client.logs(params, chunk=10000)
-        prices = []
-        for log in sorted(logs, key=lambda l: (int(l["blockNumber"]), int(l.get("logIndex", 0)))):
-            sqrt_p = _swap_sqrt_price(log)
-            if sqrt_p:
-                prices.append(sqrt_p)
+        series = self._price_series(entry, sorted(logs, key=lambda l: (int(l["blockNumber"]), int(l.get("logIndex", 0)))))
         value = None
-        if len(prices) >= 2:
-            # sqrtPrice is token1 per token0. The token's own price rises with
-            # it when the token is currency0, and falls with it otherwise.
-            route = entry.get("route") or []
-            key0 = route[-1]["currency0"] if route else None
-            token_is_0 = key0 is not None and checksum(key0) == checksum(entry["address"])
-            series = [p * p for p in prices] if token_is_0 else [1 / (p * p) for p in prices]
+        if len(series) >= 2:
             high, last = max(series), series[-1]
             value = {"drawdown": (high - last) / high if high > 0 else 0.0, "swaps": len(series),
                      "window_seconds": window}
         self._cache[key] = {"checked_at": now, "value": value}
         return value
+
+    def _price_series(self, entry, logs):
+        """The token's price after each swap, from sqrtPriceX96. sqrtPrice is
+        token1 per token0: the token's own price rises with it when the token
+        is currency0 and falls with it otherwise."""
+        prices = []
+        for log in logs:
+            try:
+                sqrt_p = _swap_sqrt_price(log)
+            except (TypeError, ValueError):
+                sqrt_p = None
+            if sqrt_p:
+                prices.append(sqrt_p)
+        route = entry.get("route") or []
+        key0 = route[-1]["currency0"] if route else None
+        token_is_0 = key0 is not None and checksum(key0) == checksum(entry["address"])
+        return [p * p for p in prices] if token_is_0 else [1 / (p * p) for p in prices]
+
+    # -- heat: the last few minutes ---------------------------------------------
+
+    HEAT_CACHE_SECONDS = 60
+
+    def heat(self, product, entry, now=None):
+        """The pool over the last `hot_window_seconds`: swaps, the age of the
+        last one and, for v4, how far the price sits below the window's high
+        and where it ended against where it started. Cached briefly and
+        published to the ledger's `heat` map for the site and the tick. None
+        when the pool cannot be read."""
+        now = time.time() if now is None else now
+        key = f"{product}:heat"
+        cached = self._cache.get(key)
+        if cached and now - cached["checked_at"] < self.HEAT_CACHE_SECONDS:
+            return cached
+        window = float(self.s.hot_window_seconds)
+        head = int(self.client.w3.eth.block_number)
+        spb = self.seconds_per_block()
+        blocks = max(1, int(window / spb))
+        logs = self._swap_logs(entry, max(0, head - blocks), head)
+        if logs is None:
+            return None
+        own = self.l.own_swap_hashes() if hasattr(self.l, "own_swap_hashes") else set()
+        if own:
+            logs = [l for l in logs if _tx_hash(l) not in own]
+        logs = sorted(logs, key=lambda l: (int(l["blockNumber"]), int(l.get("logIndex", 0))))
+        last_block = int(logs[-1]["blockNumber"]) if logs else None
+        result = {
+            "product": product,
+            "swaps": len(logs),
+            "window_seconds": window,
+            "last_swap_age_seconds": None if last_block is None else max(0.0, (head - last_block) * spb),
+            "drawdown": None,
+            "move": None,
+            "checked_at": now,
+        }
+        if entry.get("venue", "v3") == "v4":
+            series = self._price_series(entry, logs)
+            if len(series) >= 2:
+                high = max(series)
+                result["drawdown"] = (high - series[-1]) / high if high > 0 else 0.0
+                result["move"] = series[-1] / series[0] - 1 if series[0] > 0 else None
+        self._cache[key] = result
+        published = dict(self.l.get("heat") or {})
+        published[product] = result
+        self.l.put("heat", published)
+        return result
+
+    def warm(self, reading, now=None, max_age=None):
+        """Does a heat reading clear the buy thresholds, and is it recent enough
+        to trust? `max_age` bounds how old the reading itself may be."""
+        if not reading:
+            return False
+        now = time.time() if now is None else now
+        if max_age is not None and now - reading["checked_at"] > max_age:
+            return False
+        age = reading["last_swap_age_seconds"]
+        if reading["swaps"] < int(self.s.min_hot_swaps):
+            return False
+        if age is None or age > float(self.s.max_last_swap_age_seconds):
+            return False
+        dd = reading.get("drawdown")
+        return dd is None or dd <= float(D(self.s.max_hot_drawdown))
+
+    def buyable(self, product, entry, now=None):
+        """(ok, why) for a buy right now. The pool is read afresh; when it
+        cannot be, the answer is no: a buy into a pool the fly cannot see is
+        not a buy."""
+        try:
+            h = self.heat(product, entry, now)
+        except Exception as e:
+            return False, f"could not read the pool's swaps: {type(e).__name__}"
+        if h is None:
+            return False, "the pool's swaps cannot be read"
+        minutes = int(h["window_seconds"] // 60)
+        floor = int(self.s.min_hot_swaps)
+        age = h["last_swap_age_seconds"]
+        if h["swaps"] < floor:
+            return False, f"{h['swaps']} swap{'s' if h['swaps'] != 1 else ''} in the last {minutes} min, floor {floor}"
+        if age is None:
+            return False, f"no swaps in the last {minutes} min"
+        limit = float(self.s.max_last_swap_age_seconds)
+        if age > limit:
+            return False, f"last swap {age / 60:.0f} min ago, limit {limit / 60:.0f} min"
+        ceiling = float(D(self.s.max_hot_drawdown))
+        if h["drawdown"] is not None and h["drawdown"] > ceiling:
+            return False, f"{h['drawdown'] * 100:.0f}% below its {minutes}-min high, ceiling {ceiling * 100:.0f}%"
+        return True, f"{h['swaps']} swaps in the last {minutes} min, the last {age / 60:.0f} min ago"
 
     # -- judgements -------------------------------------------------------------
 

@@ -141,6 +141,14 @@ class Settings:
     # comes from the pool's own swap events over the window.
     max_recent_drawdown: str = "0.6"
     crash_window_seconds: float = 21600
+    # Heat, judged at the moment of a buy from the pool's last few minutes:
+    # this many swaps in the hot window, the last one this recent, and the
+    # price no further than this below the window's high. A pool the fly
+    # cannot read is not bought. The tick also looks first at the hottest coins.
+    hot_window_seconds: float = 900
+    min_hot_swaps: int = 3
+    max_last_swap_age_seconds: float = 600
+    max_hot_drawdown: str = "0.25"
 
     # -- airdrop ------------------------------------------------------------
     # The operator's coin, sent from the deployer wallet to wallets that bought
@@ -273,6 +281,14 @@ class Settings:
             raise ValueError("max_recent_drawdown must be a fraction between 0 and 1")
         if not math.isfinite(self.crash_window_seconds) or not 600 <= self.crash_window_seconds <= 7 * 86400:
             raise ValueError("crash_window_seconds must be 10 minutes to a week")
+        if not math.isfinite(self.hot_window_seconds) or not 300 <= self.hot_window_seconds <= 6 * 3600:
+            raise ValueError("hot_window_seconds must be 5 minutes to 6 hours")
+        if type(self.min_hot_swaps) is not int or not 0 <= self.min_hot_swaps <= 1000:
+            raise ValueError("min_hot_swaps must be 0-1000")
+        if not math.isfinite(self.max_last_swap_age_seconds) or not 60 <= self.max_last_swap_age_seconds <= 86400:
+            raise ValueError("max_last_swap_age_seconds must be a minute to a day")
+        if not D(0) < D(self.max_hot_drawdown) <= D(1):
+            raise ValueError("max_hot_drawdown must be a fraction between 0 and 1")
 
     def _check_airdrop(self):
         if type(self.airdrop_enabled) is not bool:

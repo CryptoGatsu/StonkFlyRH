@@ -50,6 +50,8 @@ class Guard:
         self.l = ledger
         self.stop_file = stop_file
         self.screen = screen
+        # Set by the run when activity tracking is on: the heat gate on buys.
+        self.activity = None
 
     # -- dollar limits ------------------------------------------------------
 
@@ -182,6 +184,12 @@ class Guard:
                 self.screen.require(product, pool, eth_usd, now)
             elif self.l.is_blocked(product):
                 raise Veto(f"{product} is blocklisted: {self.l.block_reason(product)}")
+            if self.activity is not None and self.s.activity_enabled:
+                # The screen's verdict can be a quarter of an hour old. A buy
+                # asks the pool what happened in the last few minutes.
+                ok, why = self.activity.buyable(product, self.l.universe().get(product) or {}, now)
+                if not ok:
+                    raise Veto(f"{product} is not being traded right now: {why}")
             budget = min(order_limit, self.l.cash)
             notional_wei = to_wei(budget, qd)
             fee_wei = gross_fee_wei(notional_wei, self.s.protocol_fee_bps)
