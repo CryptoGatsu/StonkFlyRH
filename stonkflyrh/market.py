@@ -56,8 +56,15 @@ class Quote:
     pool_fee: int
     probe_quote: Decimal
     probe_base: Decimal
+    # A held coin whose pool no longer quotes: bid and ask are zero by decision,
+    # not by measurement, so the books can value the position at nothing.
+    written_off: bool = False
 
     def __post_init__(self):
+        if self.written_off:
+            if self.bid != 0 or self.ask != 0 or not math.isfinite(self.timestamp):
+                raise ValueError("A written-off quote is zero on both sides")
+            return
         if (
             not self.bid.is_finite()
             or not self.ask.is_finite()
@@ -76,6 +83,8 @@ class Quote:
 
     @property
     def round_trip(self):
+        if self.bid == 0:
+            return D(1)  # nothing comes back: the whole trip is cost
         return (self.ask - self.bid) / self.bid
 
     def json(self):
@@ -189,6 +198,10 @@ class RobinhoodChainMarket:
         """Price both legs at `probe_quote` USDG, the size this run would trade."""
         result = {}
         now = time.time()
+        # Products whose pool refused to quote this time, with the reason. A
+        # drained pool must not take the whole observation down with it; the
+        # caller decides what a missing quote means for that one product.
+        self.unquotable = {}
         for product in list(self.products):
             entry = self.registry.token(product)
             fee = self.registry.pool_fee(product, self.s.pool_fee_tier)
@@ -199,10 +212,20 @@ class RobinhoodChainMarket:
             if probe_quote_wei <= 0:
                 raise RuntimeError("Order limit rounds to zero quote units")
             quote_call = self.quote_call_for(product)
-            # Buy leg: what this run's own order size actually receives.
-            base_out = quote_call(quote_token, entry["address"], probe_quote_wei, fee)
-            # Sell leg: what that same quantity fetches back on the way out.
-            quote_back = quote_call(entry["address"], quote_token, base_out, fee)
+            try:
+                # Buy leg: what this run's own order size actually receives.
+                base_out = quote_call(quote_token, entry["address"], probe_quote_wei, fee)
+                # Sell leg: what that same quantity fetches back on the way out.
+                quote_back = quote_call(entry["address"], quote_token, base_out, fee)
+            except Exception as e:
+                names = {c.__name__ for c in type(e).__mro__}
+                if not (names & {"ContractLogicError", "ContractCustomError", "ContractPanicError"}
+                        or "no output" in str(e).lower() or "unroutable" in str(e).lower()):
+                    raise  # the network failed, not the pool: let the loop back off
+                from .v4 import describe_revert
+
+                self.unquotable[product] = describe_revert(e)
+                continue
             probe_base = from_wei(base_out, base_decimals)
             ask = from_wei(probe_quote_wei, self.qd) / probe_base
             bid = from_wei(quote_back, self.qd) / probe_base

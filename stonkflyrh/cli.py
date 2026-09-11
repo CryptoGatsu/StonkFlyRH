@@ -1254,6 +1254,46 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
                 time.sleep(min(1, until - time.monotonic()))
 
 
+def _handle_unquotable(market, quotes, ledger, registry, watch, limits, now):
+    """Products whose pool refused to quote. Held: the pool is drained under
+    the fly, which is a rug; the position is written down to zero, the token
+    blocked, and it stays in the universe so the books still cover it. Not
+    held: it leaves the universe (remembered, so it comes back if it ever
+    quotes again). Returns the symbols written off."""
+    from .market import Quote
+
+    written_off = set()
+    for product, why in (getattr(market, "unquotable", None) or {}).items():
+        held = ledger.positions.get(product, D(0))
+        entry = ledger.universe().get(product) or {}
+        if held > 0:
+            quotes[product] = Quote(
+                product, D(0), D(0), now, int(entry.get("decimals", 18)), market.qd,
+                int(entry.get("pool_fee") or 0), D(limits["order_limit"]), D(0),
+                written_off=True,
+            )
+            written_off.add(product)
+            if not ledger.is_blocked(product):
+                entry_price = watch.entry_price(product) if watch is not None else None
+                ledger.record_rug({
+                    "product": product, "at": now,
+                    "entry_price": str(entry_price) if entry_price is not None else None,
+                    "exit_price": "0", "drawdown": "1",
+                    "reason": "pool no longer quotes: " + why,
+                    "screen": ledger.screen_raw(product),
+                })
+                ledger.block(product, "pool no longer quotes: " + why, now)
+                print(json.dumps({"written_off": product, "reason": why}), flush=True)
+        else:
+            ledger.remove_from_universe(product, "pool no longer quotes: " + why, now)
+            if registry is not None:
+                registry.remove_token(product)
+            market.remove_product(product)
+            quotes.pop(product, None)
+            print(json.dumps({"dropped": product, "reason": "pool no longer quotes: " + why}), flush=True)
+    return written_off
+
+
 class _SlowTickWatchdog:
     """A tick that runs far past the observation interval is a stall, and a
     stall with no log line is undiagnosable. Once per slow tick, print where
@@ -1336,9 +1376,18 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
             return
         market.products = universe
         quotes = market.snapshot(limits["order_limit"])
+        written_off = _handle_unquotable(market, quotes, ledger, getattr(market, "registry", None), watch, limits, time.time())
+        universe = ledger.products()
+        market.products = universe
+        if not universe:
+            print(json.dumps({"waiting": "every pool in the universe stopped quoting"}), flush=True)
+            time.sleep(min(settings.interval_seconds, 60))
+            return
         guard.check(quotes, time.time(), eth_usd)
         market.record(quotes)
-        product = universe[ledger.get("tick") % len(universe)]
+        # A written-off coin has nothing to observe; rotate over the live ones.
+        observable = [p for p in universe if p not in written_off] or universe
+        product = observable[ledger.get("tick") % len(observable)]
         if activity is not None:
             # A held coin whose pool has died jumps the rotation: the exit
             # happens this tick, not whenever its turn comes round.

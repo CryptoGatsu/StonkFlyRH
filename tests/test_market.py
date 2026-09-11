@@ -130,13 +130,27 @@ def test_probe_size_is_the_one_the_caller_asked_for():
     assert q.pool_fee == 10000
 
 
-def test_an_empty_pool_is_an_error_not_a_zero_price():
+def test_an_empty_pool_is_reported_unquotable_not_priced_at_zero():
+    """A pool that returns nothing must not become a zero price, and must not
+    take the other products' quotes down with it."""
     class Empty(FakeChain):
         def quote(self, params):
             return [0, 0, 0, 0]
 
-    with pytest.raises(RuntimeError, match="no output"):
-        build(Empty()).snapshot(PROBE)
+    market = build(Empty())
+    quotes = market.snapshot(PROBE)
+    assert quotes == {}
+    assert set(market.unquotable) == set(market.products)
+    assert "no output" in next(iter(market.unquotable.values()))
+
+
+def test_a_written_off_quote_is_zero_on_both_sides():
+    from stonkflyrh.market import Quote
+
+    q = Quote("DEAD", D(0), D(0), 1.0, 18, 6, 30000, D("10"), D(0), written_off=True)
+    assert q.mid == 0 and q.round_trip == 1
+    with pytest.raises(ValueError):
+        Quote("DEAD", D(0), D(0), 1.0, 18, 6, 30000, D("10"), D(0))
 
 
 def test_history_seeds_flat_when_the_oracle_has_no_observations():
