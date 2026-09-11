@@ -242,6 +242,7 @@ class PoolDiscovery:
         else:
             report["backlog_blocks"] = 0
         self._screen_pending(now, eth_usd, report)
+        report["readmitted"] = self.readmit(now, eth_usd)
         report["seconds"] = round(budget - (self._deadline - _time.monotonic()), 1)
         report["pending"] = len(self.l.get("pending_candidates") or [])
         self.l.record_discovery(report)
@@ -506,6 +507,58 @@ class PoolDiscovery:
         self.l.add_to_universe(entry)
         self.l.mark_candidate(address, "added", now)
         return {"address": address, "symbol": symbol, "added": True, "pool": entry["pool"]}
+
+    # A dropped token is screened again every screen_ttl_seconds, this many
+    # times, before it is given up on.
+    MAX_READMIT_TRIES = 48
+
+    def readmit(self, now, eth_usd):
+        """Look again at tokens the screen dropped, once their verdict has aged;
+        a token that clears rejoins the universe with its route intact."""
+        import time as _time
+
+        deadline = getattr(self, "_deadline", None)
+        dropped = self.l.dropped()
+        if not dropped:
+            return []
+        universe = self.l.universe()
+        room = max(0, int(self.s.max_products) - len(universe))
+        back = []
+        changed = False
+        for symbol, entry in sorted(dropped.items(), key=lambda kv: kv[1].get("dropped_at", 0)):
+            if deadline is not None and _time.monotonic() > deadline:
+                break
+            if now - float(entry.get("dropped_at", 0)) < float(self.s.screen_ttl_seconds):
+                continue
+            if symbol in universe or self.l.is_blocked(symbol):
+                dropped.pop(symbol, None)
+                changed = True
+                continue
+            if room <= 0:
+                break
+            self.registry.add_token(entry)
+            self.market.add_product(symbol, entry["pool"], entry["pool_fee"], entry.get("venue", "v3"), entry.get("route"))
+            verdict = self.screen.assess(symbol, entry["pool"], eth_usd, now, force=True)
+            if verdict.approved:
+                clean = {k: v for k, v in entry.items() if k not in ("reason", "dropped_at", "drops")}
+                clean["readmitted_at"] = now
+                self.l.add_to_universe(clean)
+                dropped.pop(symbol, None)
+                room -= 1
+                back.append({"symbol": symbol, "after_drops": entry.get("drops", 1)})
+            else:
+                self.registry.remove_token(symbol)
+                self.market.remove_product(symbol)
+                if int(entry.get("drops", 1)) >= self.MAX_READMIT_TRIES:
+                    dropped.pop(symbol, None)
+                    self.l.mark_candidate(entry.get("address", symbol), "dropped for good: " + verdict.reason(), now)
+                else:
+                    dropped[symbol] = {**entry, "dropped_at": now, "reason": verdict.reason(),
+                                       "drops": int(entry.get("drops", 1)) + 1}
+            changed = True
+        if changed:
+            self.l.put("dropped", dropped)
+        return back
 
     def prune(self, now, eth_usd):
         """Drop an unheld discovered token that no longer clears the screen."""

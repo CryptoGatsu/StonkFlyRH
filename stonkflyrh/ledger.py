@@ -330,6 +330,16 @@ class Ledger:
             self.record_discovery(
                 {"at": now, "dropped": [{"symbol": symbol, "reason": reason, **removed}]}
             )
+            # Remembered with everything needed to screen it again later: a
+            # token that fails today may clear tomorrow.
+            dropped = dict(self.get("dropped") or {})
+            previous = dropped.get(symbol) or {}
+            dropped[symbol] = {**removed, "reason": reason, "dropped_at": now,
+                               "drops": int(previous.get("drops", 0)) + 1}
+            self.put("dropped", dropped)
+
+    def dropped(self):
+        return dict(self.get("dropped") or {})
 
     def seed_universe(self, registry, verified, now):
         """Fill seed entries with what the registry and the chain know."""

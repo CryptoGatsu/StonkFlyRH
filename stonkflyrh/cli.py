@@ -480,6 +480,7 @@ def cmd_discovery(a):
         "scanned_to_block": meta.get("discovery_block"),
         "backlog_blocks": meta.get("discovery_backlog"),
         "universe": list((meta.get("universe") or {}).keys()),
+        "dropped": {k: v.get("reason", "")[:90] for k, v in (meta.get("dropped") or {}).items()},
         "bridges": {k: v.get("symbol") for k, v in (meta.get("bridges") or {}).items()},
         "candidates_pending": len(meta.get("pending_candidates") or []),
         "candidates_waiting_for_liquidity": sum(
@@ -608,18 +609,22 @@ def cmd_probe(a):
     net, client, registry, verified = chain_context(a.network, a.tokens, [])
     ledger = Ledger(a.out / "ledger.sqlite", settings, meta["mode"])
     try:
-        entry = ledger.universe().get(a.product.upper())
+        entry = ledger.universe().get(a.product.upper()) or ledger.dropped().get(a.product.upper())
     finally:
         ledger.close()
     if not entry:
-        raise SystemExit(f"{a.product} is not in the universe; see the UNIVERSE tab for symbols")
+        raise SystemExit(f"{a.product} is neither in the universe nor among dropped tokens; "
+                         "see the UNIVERSE tab for symbols")
+    report_dropped = ({"dropped_at": entry.get("dropped_at"), "reason": entry.get("reason")}
+                      if entry.get("reason") else None)
     if entry.get("venue") != "v4" or not entry.get("route"):
         raise SystemExit(f"{a.product} is a {entry.get('venue')} token; this probe covers v4 routes")
     venue = V4Venue(client, registry)
     fly = checksum(wallet_address("trading") or FLY_WALLET)
     quote = registry.quote_address
     amount = to_wei(settings.order_limit_usd, registry.quote_decimals)
-    report = {"product": a.product.upper(), "token": entry["address"], "route_hops": len(entry["route"]),
+    report = {"product": a.product.upper(), "token": entry["address"], "dropped": report_dropped,
+              "route_hops": len(entry["route"]),
               "via": entry.get("via"), "hooks": entry.get("hooks"), "amount_in_usdg": str(settings.order_limit_usd),
               "fly_wallet": fly}
     # 1. the quote the run relies on

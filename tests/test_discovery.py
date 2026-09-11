@@ -443,3 +443,43 @@ def test_a_scan_stops_at_its_time_budget_and_leaves_the_rest_queued(tmp_path, mo
         assert len(ledger.universe()) == 5                    # PONS plus four tokens
     finally:
         ledger.close()
+
+
+def test_a_dropped_token_is_looked_at_again_and_readmitted_when_it_clears(tmp_path):
+    chain = Chain([log_for(addr(80), 1000)], 1200, {addr(80): ("BACK", 18)})
+    _, ledger, registry, market, disc = build(tmp_path, chain, screen_ttl_seconds=100)
+    try:
+        now = time.time()
+        assert [a["symbol"] for a in disc.scan(now, ETH_USD)["added"]] == ["BACK"]
+        # The pool drains: once the cached verdict ages, the re-screen drops
+        # it, and it is remembered.
+        chain.sellable = False
+        dropped = disc.prune(now + 101, ETH_USD)
+        assert [d["symbol"] for d in dropped] == ["BACK"]
+        assert "BACK" in ledger.dropped() and "BACK" not in ledger.universe()
+        # Too soon to look again; nothing happens.
+        chain.sellable = True
+        assert disc.readmit(now + 150, ETH_USD) == []
+        # Its verdict has aged and the pool is sellable again: it comes back.
+        back = disc.readmit(now + 250, ETH_USD)
+        assert [b["symbol"] for b in back] == ["BACK"]
+        assert "BACK" in ledger.universe() and "BACK" in market.products and "BACK" not in ledger.dropped()
+        assert ledger.universe()["BACK"]["route"] is None and ledger.universe()["BACK"].get("readmitted_at")
+    finally:
+        ledger.close()
+
+
+def test_a_token_that_keeps_failing_is_given_up_on(tmp_path):
+    chain = Chain([log_for(addr(81), 1000)], 1200, {addr(81): ("GONE", 18)})
+    _, ledger, _, _, disc = build(tmp_path, chain, screen_ttl_seconds=1)
+    try:
+        now = time.time()
+        disc.scan(now, ETH_USD)
+        chain.sellable = False
+        assert disc.prune(now + 2, ETH_USD)
+        for i in range(PoolDiscovery.MAX_READMIT_TRIES + 1):
+            disc.readmit(now + 10 + i * 5, ETH_USD)
+        assert "GONE" not in ledger.dropped()
+        assert any("dropped for good" in o for (o,) in ledger.db.execute("SELECT outcome FROM candidates"))
+    finally:
+        ledger.close()
