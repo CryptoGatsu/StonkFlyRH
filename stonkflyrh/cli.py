@@ -1337,6 +1337,20 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
         guard.check(quotes, time.time(), eth_usd)
         market.record(quotes)
         product = universe[ledger.get("tick") % len(universe)]
+        if activity is not None:
+            # A held coin whose pool has died jumps the rotation: the exit
+            # happens this tick, not whenever its turn comes round.
+            for held_product, amount in ledger.positions.items():
+                if amount > 0 and held_product in quotes:
+                    try:
+                        why = activity.exit_reason(
+                            held_product, ledger.universe().get(held_product, {}), amount, time.time()
+                        )
+                    except Exception:
+                        why = None
+                    if why:
+                        product = held_product
+                        break
         q = quotes[product]
         inflows = payouts = None
         if donations is not None:

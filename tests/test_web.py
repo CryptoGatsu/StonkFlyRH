@@ -223,3 +223,31 @@ def test_state_lists_airdrops_when_the_run_has_them(site):
     _, _, body = get(base + "/api/state")
     drops = json.loads(body)["meta"]["airdrops"]
     assert drops[0]["address"] == "0xabc" and drops[0]["status"] == "SENT"
+
+
+def test_coin_market_summarises_the_deepest_dexscreener_pair():
+    payload = {"pairs": [
+        {"dexId": "uniswap", "chainId": "robinhood", "url": "https://dexscreener.com/robinhood/0xpair1",
+         "pairAddress": "0xpair1", "quoteToken": {"symbol": "GOOGL"}, "priceUsd": "0.0000123",
+         "marketCap": 84000, "fdv": 90000, "volume": {"h24": 12345.6}, "liquidity": {"usd": 20000},
+         "priceChange": {"h24": -3.2}, "txns": {"h24": {"buys": 40, "sells": 22}}},
+        {"dexId": "other", "chainId": "robinhood", "url": "u2", "pairAddress": "0xpair2",
+         "quoteToken": {"symbol": "ETH"}, "priceUsd": "0.0000120", "marketCap": 80000,
+         "volume": {"h24": 10}, "liquidity": {"usd": 500}, "priceChange": {"h24": 1.0}, "txns": {}},
+    ]}
+    result = web.coin_market("0x" + "f1" * 20, fetch=lambda address: payload)
+    top = result["pairs"][0]
+    assert top["pair_address"] == "0xpair1" and top["quote"] == "GOOGL"
+    assert top["market_cap"] == 84000 and top["volume_24h"] == 12345.6 and top["txns_24h"] == 62
+    assert result["pairs"][1]["txns_24h"] is None
+    empty = web.coin_market("0x" + "f1" * 20, fetch=lambda address: {"pairs": []})
+    assert empty["pairs"] == [] and "error" not in empty
+    failing = web.coin_market("0x" + "f1" * 20, fetch=lambda address: (_ for _ in ()).throw(TimeoutError()))
+    assert failing["pairs"] == [] and failing["error"] == "TimeoutError"
+
+
+def test_the_coin_endpoint_is_served(site, monkeypatch):
+    base, _ = site
+    monkeypatch.setattr(web, "coin_market", lambda: {"address": "0xabc", "pairs": []})
+    _, kind, body = get(base + "/api/coin")
+    assert kind.startswith("application/json") and json.loads(body)["pairs"] == []

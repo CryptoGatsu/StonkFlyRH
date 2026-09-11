@@ -134,6 +134,62 @@ def read_trades(out, limit=MAX_TRADES):
     return rows
 
 
+_COIN_CACHE = {"at": 0.0, "value": None}
+COIN_CACHE_SECONDS = 60
+
+
+def coin_market(address=None, fetch=None):
+    """Market cap, 24 h volume, liquidity and price of the operator's coin from
+    DexScreener's public API, cached a minute. The site never talks to
+    DexScreener itself; this server does, so the browser needs no third party.
+    {"pairs": []} means the coin has no DEX pair yet (still on its curve)."""
+    from ..wallet import coin_address
+
+    address = address or coin_address()
+    if not address:
+        return {"address": None, "pairs": []}
+    now = time.time()
+    if fetch is None and _COIN_CACHE["value"] is not None and now - _COIN_CACHE["at"] < COIN_CACHE_SECONDS:
+        return _COIN_CACHE["value"]
+    result = {"address": address, "fetched_at": now, "pairs": []}
+    try:
+        if fetch is None:
+            import urllib.request
+
+            req = urllib.request.Request(
+                f"https://api.dexscreener.com/latest/dex/tokens/{address}",
+                headers={"User-Agent": "stonkflyrh-site"},
+            )
+            with urllib.request.urlopen(req, timeout=8) as r:
+                payload = json.loads(r.read().decode("utf-8"))
+        else:
+            payload = fetch(address)
+        pairs = []
+        for pair in payload.get("pairs") or []:
+            pairs.append({
+                "dex": pair.get("dexId"),
+                "chain": pair.get("chainId"),
+                "url": pair.get("url"),
+                "pair_address": pair.get("pairAddress"),
+                "quote": (pair.get("quoteToken") or {}).get("symbol"),
+                "price_usd": pair.get("priceUsd"),
+                "market_cap": pair.get("marketCap") or pair.get("fdv"),
+                "fdv": pair.get("fdv"),
+                "volume_24h": (pair.get("volume") or {}).get("h24"),
+                "liquidity_usd": (pair.get("liquidity") or {}).get("usd"),
+                "change_24h": (pair.get("priceChange") or {}).get("h24"),
+                "txns_24h": sum((pair.get("txns") or {}).get("h24", {}).values()) if isinstance((pair.get("txns") or {}).get("h24"), dict) else None,
+            })
+        # The deepest pair speaks for the coin.
+        pairs.sort(key=lambda p: -(float(p["liquidity_usd"] or 0)))
+        result["pairs"] = pairs
+    except Exception as e:
+        result["error"] = type(e).__name__
+    if fetch is None:
+        _COIN_CACHE["at"], _COIN_CACHE["value"] = now, result
+    return result
+
+
 def snapshot(out):
     meta = read_meta(out)
     provenance = {}
@@ -220,6 +276,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._file(png if png.exists() else STATIC / "favicon.svg")
         if route == "/api/state":
             return self._json(snapshot(self.out))
+        if route == "/api/coin":
+            return self._json(coin_market())
         if route == "/api/trades":
             since = int((query.get("since") or ["0"])[0])
             rows = [r for r in read_trades(self.out) if int(r.get("tick", 0)) > since]

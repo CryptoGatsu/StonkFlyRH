@@ -189,6 +189,11 @@
   .coin-name { display: flex; gap: 10px; align-items: baseline; margin: 0 0 10px; }
   .coin-name b { font: 700 18px/1 var(--pixel); color: var(--cyan); letter-spacing: .08em; }
   .coin-name span { color: var(--muted); font-size: 12px; }
+  .coin-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 4px 0 12px; }
+  @media (max-width: 560px) { .coin-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .coin-stats .label { font-size: 8px; }
+  .coin-stats .v { font: 700 14px/1.2 var(--pixel); color: var(--ink); margin-top: 4px; letter-spacing: .04em; }
+  .coin-stats .v.up { color: var(--lime); } .coin-stats .v.down { color: var(--pink); }
   .donate { border: 1px solid var(--lime); background: var(--raise); padding: 14px 16px; margin: 14px 0 6px; box-shadow: 4px 4px 0 #000; }
   .donate.paper { border-color: var(--amber); }
   .donate-status { color: var(--amber); font: 700 9px/1.6 var(--pixel); letter-spacing: .1em; margin-bottom: 10px; }
@@ -318,6 +323,12 @@
         <section class="coin" id="coin" hidden>
           <div class="row-head"><span class="label ink">The coin</span><span class="right" id="coin-state">—</span></div>
           <div class="coin-name"><b id="coin-symbol">—</b><span id="coin-name"></span></div>
+          <div class="coin-stats" id="coin-stats" hidden>
+            <div><div class="label">Market cap</div><div class="v" id="coin-mc">—</div></div>
+            <div><div class="label">24h volume</div><div class="v" id="coin-vol">—</div></div>
+            <div><div class="label">Liquidity</div><div class="v" id="coin-liq">—</div></div>
+            <div><div class="label">24h</div><div class="v" id="coin-chg">—</div></div>
+          </div>
           <div class="addr-box">
             <code id="coin-addr">—</code>
             <button class="chip dark" type="button" id="copy-coin">Copy</button>
@@ -662,7 +673,10 @@ function renderCoin() {
   $("coin-addr").textContent = coin.address;
   const inUniverse = Object.values(meta.universe || {}).find((e) => (e.address || "").toLowerCase() === coin.address.toLowerCase());
   const held = inUniverse && Number((meta.positions || {})[inUniverse.symbol] || 0) > 0;
-  $("coin-state").textContent = held ? "held by the fly" : inUniverse ? "in the fly's universe" : "waiting for its pool";
+  if (!(coinMarket && coinMarket.pairs && coinMarket.pairs[0])) {
+    $("coin-state").textContent = held ? "held by the fly" : inUniverse ? "in the fly's universe" : "waiting for its pool";
+  }
+  renderCoinMarket();
   const links = [];
   if (explorer) links.push(`<a href="${esc(explorer)}/token/${esc(coin.address)}" target="_blank" rel="noopener">explorer</a>`);
   links.push(`<a href="https://www.ponsfamily.com/launchpad/${esc(coin.address)}" target="_blank" rel="noopener">pons</a>`);
@@ -670,6 +684,31 @@ function renderCoin() {
   links.push(`<a href="https://x.com/StonkFlyRH" target="_blank" rel="noopener">@StonkFlyRH on X</a>`);
   $("coin-links").innerHTML = "The operator's launch on Pons, paired with GOOGL. Screened like any other token; the fly decides whether to hold it. · " + links.join(" · ");
 }
+let coinMarket = null;
+function renderCoinMarket() {
+  const box = $("coin-stats");
+  const pair = coinMarket && coinMarket.pairs && coinMarket.pairs[0];
+  if (!pair) { box.hidden = true; return; }
+  box.hidden = false;
+  $("coin-mc").textContent = compact(pair.market_cap);
+  $("coin-vol").textContent = compact(pair.volume_24h);
+  $("coin-liq").textContent = compact(pair.liquidity_usd);
+  const chg = Number(pair.change_24h);
+  $("coin-chg").textContent = Number.isFinite(chg) ? (chg >= 0 ? "+" : "") + chg.toFixed(1) + "%" : "—";
+  $("coin-chg").className = "v " + (chg >= 0 ? "up" : "down");
+  if (pair.price_usd) $("coin-name").textContent = usd(Number(pair.price_usd), 8) + " per coin" + (pair.quote ? " · paired with " + esc(pair.quote) : "");
+  if (pair.url) $("coin-state").innerHTML = `<a href="${esc(pair.url)}" target="_blank" rel="noopener">live on ${esc(pair.dex || "dex")} ↗</a>`;
+}
+async function pollCoinMarket() {
+  if (PREVIEW) return;
+  try {
+    const r = await fetch("/api/coin", { cache: "no-store" });
+    coinMarket = await r.json();
+    renderCoinMarket();
+  } catch {}
+  setTimeout(pollCoinMarket, 60000);
+}
+pollCoinMarket();
 $("copy-coin").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText($("coin-addr").textContent); $("copy-coin").textContent = "Copied"; setTimeout(() => $("copy-coin").textContent = "Copy", 1500); } catch {}
 });
@@ -679,7 +718,7 @@ function renderState(s) {
   explorer = (prov.network && prov.network.explorer) || null;
   quoteSymbol = settings.quote_symbol || "USDG";
   $("quote-sym").textContent = quoteSymbol;
-  renderBag(); renderLimits(); renderScreens(); renderUniverse(); renderDonations(); renderAirdrops(); renderCoin();
+  renderBag(); renderLimits(); renderScreens(); renderUniverse(); renderDonations(); renderAirdrops(); renderCoin(); refreshTradePnl();
 }
 
 /* ---------------- rows ---------------- */
@@ -695,11 +734,16 @@ function tradeRow(row, fresh) {
   const link = ex.tx_hash && explorer ? ` <a href="${esc(explorer)}/tx/${esc(ex.tx_hash)}" target="_blank" rel="noopener">${shortHash(ex.tx_hash)}</a>` : "";
   const realized = side === "SELL" && row.pnl_delta_usd ? signed(row.pnl_delta_usd) : "—";
   const tr = document.createElement("tr"); if (fresh) tr.className = "fresh";
+  if (side === "BUY" && Number.isFinite(units) && units > 0) {
+    // A buy's P&L is live while the coin is held: refreshed with every price.
+    tr.dataset.product = row.product; tr.dataset.units = String(units); tr.dataset.cost = String(value + fee);
+  }
   tr.innerHTML = `<td>${clock(row.wall_time)}<span class="k">#${esc(row.tick)}</span></td>
     <td><span class="side ${esc(side)}">${esc(side)} ${esc(row.product)}</span><span class="k">${qty(units)} @ ${usd(mark, 8)}${Number.isFinite(marketCap(row.product, Number(mark))) ? " · MC " + compact(marketCap(row.product, Number(mark))) : ""}${link}${tokenLinks((meta.universe && meta.universe[row.product] && meta.universe[row.product].address) || (meta.dropped && meta.dropped[row.product] && meta.dropped[row.product].address) || "")}</span></td>
     <td class="r">${usd(value)}</td><td class="r">${fee ? usd(fee) : "—"}</td>
-    <td class="r ${side === "SELL" && Number(row.pnl_delta_usd) < 0 ? "SELL" : "BUY"}">${realized}</td>`;
+    <td class="r pnl ${side === "SELL" && Number(row.pnl_delta_usd) < 0 ? "SELL" : "BUY"}">${realized}</td>`;
   const body = $("trades"); body.prepend(tr); while (body.children.length > 100) body.lastElementChild.remove();
+  refreshTradePnl();
   $("trades-empty").hidden = true;
   $("n-trades").textContent = body.children.length;
 }
@@ -732,6 +776,23 @@ function renderOrder(row) {
   $("n-mem").textContent = n.memory && n.memory.changed_edges !== undefined ? Number(n.memory.changed_edges).toLocaleString() : "—";
   $("n-time").textContent = n.brain_ms !== undefined ? (Number(n.brain_ms) / 1000).toFixed(1) + " S" : "—";
 }
+function refreshTradePnl() {
+  // Open buys: what the position is worth now against what it cost, fees in.
+  const positions = meta.positions || {};
+  document.querySelectorAll("#trades tr[data-product]").forEach((tr) => {
+    const sym = tr.dataset.product, units = Number(tr.dataset.units), cost = Number(tr.dataset.cost);
+    const cell = tr.querySelector("td.pnl"); if (!cell) return;
+    const held = Number(positions[sym] ?? 0);
+    const q = latestByProduct[sym] && latestByProduct[sym].quote;
+    const bid = q ? Number(q.bid) : NaN;
+    if (!(held > 0)) { cell.innerHTML = `<span class="k" style="display:inline">closed</span>`; cell.className = "r pnl"; return; }
+    if (!Number.isFinite(bid)) return;
+    const now = Math.min(units, held) * bid, pnl = now - cost, pct = cost > 0 ? pnl / cost * 100 : NaN;
+    cell.innerHTML = `${signed(pnl)}<span class="k">${Number.isFinite(pct) ? (pct >= 0 ? "+" : "") + pct.toFixed(1) + "% · live" : "live"}</span>`;
+    cell.className = "r pnl " + (pnl >= 0 ? "BUY" : "SELL");
+  });
+}
+
 function renderTrade(row, fresh) {
   allRows.push(row); lastRow = row; lastWall = Math.max(lastWall, Number(row.wall_time) || 0);
   latestByProduct[row.product] = row;
