@@ -34,16 +34,16 @@ def test_a_requested_exit_sells_the_whole_position_through_the_exit_spread(tmp_p
     ledger = Ledger(tmp_path / "l.sqlite", settings, "paper", D("100"))
     try:
         ledger.commit_tick(ledger.cash, None)
-        ledger.put("positions", {"RETAIL": "5000"})
+        ledger.put("positions", {"RETAIL": "50000"})
         guard = Guard(settings, ledger, tmp_path / "STOP")
         q = Quote("RETAIL", D("0.001"), D("0.00101"), 1000.0, 18, 6, 30000, D("0.001005"), D("1"))
         # Without a request a sell is a slice of the position, one order's worth.
         slice_ = guard.plan("RETAIL", "SELL", {"RETAIL": q}, D("3000"), now=1000.0, gas_price_wei=None, history=[0.001] * 5)
-        assert D(slice_["amount_in_wei"]) < D(5000) * 10**18
+        assert D(slice_["amount_in_wei"]) < D(50000) * 10**18
         guard.exit_requests = {"RETAIL"}
         assert guard.spread_limit("RETAIL", "SELL") == D(settings.rug_exit_spread)
         whole = guard.plan("RETAIL", "SELL", {"RETAIL": q}, D("3000"), now=1000.0, gas_price_wei=None, history=[0.001] * 5)
-        assert D(whole["amount_in_wei"]) == D(5000) * 10**18
+        assert D(whole["amount_in_wei"]) == D(50000) * 10**18
         assert not ledger.is_blocked("RETAIL")
     finally:
         ledger.close()
