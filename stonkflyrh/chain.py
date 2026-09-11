@@ -11,6 +11,7 @@ stale address fails loudly at preflight instead of quietly sending value to a
 contract nobody verified.
 """
 
+import json
 import os
 
 from .config import D
@@ -425,14 +426,20 @@ class ChainClient:
             attempt = 0
             while True:
                 try:
-                    out += self.w3.eth.get_logs({**params, "fromBlock": start, "toBlock": end})
+                    out += self.logs_eth().get_logs({**params, "fromBlock": start, "toBlock": end})
                     break
                 except Exception as e:
                     text = str(e).lower()
+                    refused = "413" in text or "too large" in text
+                    if refused and self._switch_logs_provider():
+                        # A hosted endpoint that refuses eth_getLogs outright;
+                        # the public node serves it, at its own pace.
+                        pause = max(pause, 0.6)
+                        continue
                     # "range"/"too many"/"limit": the node caps the block span.
                     # "413"/"too large": a hosted endpoint caps the reply size.
                     # Either way a smaller window is the answer.
-                    too_big = any(k in text for k in ("range", "too many", "limit", "413", "too large"))
+                    too_big = refused or any(k in text for k in ("range", "too many", "limit"))
                     if too_big and chunk > 25:
                         chunk //= 2
                         end = min(hi, start + chunk - 1)
@@ -445,6 +452,30 @@ class ChainClient:
             if start <= hi and pause:
                 _time.sleep(pause)
         return out, hi
+
+    def logs_eth(self):
+        """The eth namespace that serves eth_getLogs: the main provider until a
+        dedicated endpoint refuses the method, then the fallback."""
+        alt = getattr(self, "_logs_w3", None)
+        return alt.eth if alt is not None else self.w3.eth
+
+    def _switch_logs_provider(self):
+        """Move eth_getLogs to the fallback endpoint (STONKFLYRH_LOGS_RPC_URL,
+        else the network's public RPC). False when there is nowhere to go."""
+        if getattr(self, "_logs_w3", None) is not None:
+            return False
+        primary = os.environ.get("STONKFLYRH_RPC_URL")
+        fallback = os.environ.get("STONKFLYRH_LOGS_RPC_URL") or (self.net.rpc if primary else None)
+        if not fallback or fallback == primary:
+            return False
+        from web3 import HTTPProvider, Web3
+
+        alt = Web3(HTTPProvider(fallback, request_kwargs={"timeout": 15}))
+        if int(alt.eth.chain_id) != self.net.chain_id:
+            return False
+        self._logs_w3 = alt
+        print(json.dumps({"logs_provider": "fallback", "reason": "the primary endpoint refused eth_getLogs"}), flush=True)
+        return True
 
     def nonce(self, address):
         # "pending" would let a stuck transaction silently shift the nonce of an

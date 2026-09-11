@@ -126,6 +126,12 @@ Discovery keeps its place: the block reached is written to the ledger after ever
 6,000-block window and candidates wait in a queue there until screened, so an error
 mid-scan resumes from the last window and never re-screens a pool it already judged.
 
+Some hosted endpoints refuse `eth_getLogs` on this chain (QuickNode answers HTTP 413
+to every call). The first refusal moves log fetching to `STONKFLYRH_LOGS_RPC_URL`, or
+the network's public RPC when that is unset, for the rest of the process; quotes,
+balances and transactions stay on the dedicated endpoint. The journal notes the switch
+once as `logs_provider: fallback`.
+
 ## Changing settings on a running ledger
 
 Restarting with a changed `.env` is fine for tuning values: order size, screen

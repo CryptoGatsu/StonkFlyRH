@@ -97,3 +97,32 @@ def test_the_chunk_halves_when_a_hosted_endpoint_refuses_a_large_reply(monkeypat
     out, hi = c.logs({"fromBlock": 1, "toBlock": 1000}, chunk=2000, pause=0)
     assert hi == 1000 and len(out) == 2
     assert eth.calls[-1][1] - eth.calls[-1][0] + 1 <= 500
+
+
+def test_get_logs_moves_to_the_fallback_when_the_primary_refuses_it(monkeypatch):
+    """QuickNode answered 413 to every eth_getLogs on this chain; the public node
+    serves the method, so logs go there while everything else stays put."""
+    from stonkflyrh.chain import ChainClient
+
+    class Refusing(Eth):
+        def get_logs(self, q):
+            self.calls.append((q["fromBlock"], q["toBlock"]))
+            raise RuntimeError("413 Client Error: Request Entity Too Large for url: https://primary")
+
+    primary, public = Refusing(), Eth()
+    c = client(primary)
+    monkeypatch.setenv("STONKFLYRH_RPC_URL", "https://primary.example")
+    monkeypatch.setattr(ChainClient, "_switch_logs_provider",
+                        lambda self: setattr(self, "_logs_w3", type("W3", (), {"eth": public})()) or True)
+    out, hi = c.logs({"fromBlock": 1, "toBlock": 3000}, chunk=2000, pause=0)
+    assert len(primary.calls) == 1                    # refused once, never asked again
+    assert public.calls == [(1, 2000), (2001, 3000)]
+    assert hi == 3000 and len(out) == 2
+    assert c.logs_eth() is public and c.w3.eth is primary
+
+
+def test_without_a_dedicated_endpoint_there_is_no_fallback(monkeypatch):
+    monkeypatch.delenv("STONKFLYRH_RPC_URL", raising=False)
+    monkeypatch.delenv("STONKFLYRH_LOGS_RPC_URL", raising=False)
+    c = client(Eth())
+    assert c._switch_logs_provider() is False
