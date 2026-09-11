@@ -199,6 +199,8 @@ def settings_from(args, net_key):
         min_hot_swaps=int(os.environ.get("STONKFLYRH_MIN_HOT_SWAPS", "3")),
         max_last_swap_age_seconds=float(os.environ.get("STONKFLYRH_MAX_LAST_SWAP_AGE_SECONDS", "600")),
         max_hot_drawdown=os.environ.get("STONKFLYRH_MAX_HOT_DRAWDOWN", "0.25"),
+        volume_window_seconds=float(os.environ.get("STONKFLYRH_VOLUME_WINDOW_SECONDS", "300")),
+        min_volume_usd=os.environ.get("STONKFLYRH_MIN_VOLUME_USD", "5000"),
     )
 
 
@@ -1418,7 +1420,7 @@ class _SlowTickWatchdog:
             self.reported = True
 
 
-def _pick_product(observable, ledger, activity, settings, now):
+def _pick_product(observable, ledger, activity, settings, now, quotes=None):
     """What the fly looks at this tick. Held coins always take their turn: a
     sell needs looking. Unheld coins take theirs only while their pool is
     warm by its last heat reading, hottest few first, so the brain is shown
@@ -1435,8 +1437,10 @@ def _pick_product(observable, ledger, activity, settings, now):
     if unheld:
         due = min(unheld, key=lambda p: (heat.get(p) or {}).get("checked_at", 0))
         if now - (heat.get(due) or {}).get("checked_at", 0) >= activity.HEAT_CACHE_SECONDS:
+            q = (quotes or {}).get(due)
+            price = (q.bid + q.ask) / 2 if q is not None and not getattr(q, "written_off", False) else None
             try:
-                fresh = activity.heat(due, universe.get(due, {}), now)
+                fresh = activity.heat(due, universe.get(due, {}), now, price)
             except Exception:
                 fresh = None
             if fresh:
@@ -1533,7 +1537,7 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
         market.record(quotes)
         # A written-off coin has nothing to observe; rotate over the live ones.
         observable = [p for p in universe if p not in written_off] or universe
-        product = _pick_product(observable, ledger, activity, settings, time.time())
+        product = _pick_product(observable, ledger, activity, settings, time.time(), quotes)
         # The operator's `sell` requests: a held, quotable coin jumps the
         # rotation; one that is not held (or cannot be quoted) is cleared.
         requests = _sell_requests(out)

@@ -8,13 +8,13 @@ import pytest
 from stonkflyrh.cli import _pick_product
 from stonkflyrh.config import D, Settings
 from stonkflyrh.risk import Guard, Veto
-from tests.test_activity import V4_ENTRY, build, swap_log, swap_with_price
+from tests.test_activity import PM, POOL_ID, SWAP_V4, V4_ENTRY, build, swap_log, swap_topic, swap_with_price
 
 
 def test_a_pool_swapping_right_now_is_hot(tmp_path):
     # Four blocks a second; the window is 900 s = 3600 blocks back from 100_000.
     logs = [swap_log(b) for b in (97_000, 98_500, 99_900, 99_990)]
-    _, ledger, monitor = build(tmp_path, logs)
+    _, ledger, monitor = build(tmp_path, logs, min_volume_usd="0")
     try:
         h = monitor.heat("WOOF", V4_ENTRY, now=1000.0)
         assert h["swaps"] == 4 and h["last_swap_age_seconds"] == pytest.approx(2.5)
@@ -28,7 +28,7 @@ def test_a_pool_swapping_right_now_is_hot(tmp_path):
 def test_five_swaps_an_hour_ago_is_not_hot(tmp_path):
     """The screen's hourly floor would pass this pool; the buy gate does not."""
     logs = [swap_log(b) for b in (86_000, 86_100, 86_200, 86_300, 86_400)]
-    _, ledger, monitor = build(tmp_path, logs)
+    _, ledger, monitor = build(tmp_path, logs, min_volume_usd="0")
     try:
         assert monitor.enough("WOOF", V4_ENTRY, now=1000.0)[0] is True
         ok, why = monitor.buyable("WOOF", V4_ENTRY, now=1000.0)
@@ -39,7 +39,7 @@ def test_five_swaps_an_hour_ago_is_not_hot(tmp_path):
 
 def test_a_last_swap_too_old_or_a_fresh_collapse_is_not_bought(tmp_path):
     logs = [swap_log(b) for b in (96_500, 96_600, 96_700)]  # last one ~14 min ago
-    _, ledger, monitor = build(tmp_path, logs)
+    _, ledger, monitor = build(tmp_path, logs, min_volume_usd="0")
     try:
         ok, why = monitor.buyable("WOOF", V4_ENTRY, now=1000.0)
         assert not ok and "last swap 14 min ago" in why
@@ -49,7 +49,7 @@ def test_a_last_swap_too_old_or_a_fresh_collapse_is_not_bought(tmp_path):
     entry = {**V4_ENTRY, "route": [key]}
     # Token is currency1: a rising sqrtPrice is a falling token price. 1.0 -> 2.0 is -75%.
     logs = [swap_with_price(99_000, 1.0), swap_with_price(99_500, 1.1), swap_with_price(99_990, 2.0)]
-    _, ledger, monitor = build(tmp_path / "b", logs)
+    _, ledger, monitor = build(tmp_path / "b", logs, min_volume_usd="0")
     try:
         h = monitor.heat("WOOF", entry, now=1000.0)
         assert h["drawdown"] == pytest.approx(0.75) and h["move"] == pytest.approx(-0.75)
@@ -78,8 +78,9 @@ class Cold:
         self.why = why
         self.asked = []
 
-    def buyable(self, product, entry, now=None):
+    def buyable(self, product, entry, now=None, price=None):
         self.asked.append(product)
+        self.price = price
         return False, self.why
 
 
@@ -96,7 +97,7 @@ def test_the_guard_vetoes_a_buy_into_a_cold_pool(tmp_path):
         q = Quote("WOOF", D("1.00"), D("1.01"), 1000.0, 18, 6, 3000, D("1.005"), D("1"))
         with pytest.raises(Veto, match="WOOF is not being traded right now: 0 swaps"):
             guard.plan("WOOF", "BUY", {"WOOF": q}, D("3000"), now=1000.0, gas_price_wei=10**9, history=[1.0] * 5)
-        assert guard.activity.asked == ["WOOF"]
+        assert guard.activity.asked == ["WOOF"] and guard.activity.price == D("1.005")
     finally:
         ledger.close()
 
@@ -110,7 +111,7 @@ class Map:
         self.readings = readings
         self.refreshed = []
 
-    def heat(self, product, entry, now=None):
+    def heat(self, product, entry, now=None, price=None):
         self.refreshed.append(product)
         return self.readings.get(product)
 
@@ -133,20 +134,21 @@ class L:
         return {}
 
 
-def hot(swaps, age, at):
-    return {"swaps": swaps, "last_swap_age_seconds": age, "drawdown": 0.0, "checked_at": at, "window_seconds": 900}
+def hot(swaps, age, at, volume=9000.0):
+    return {"swaps": swaps, "last_swap_age_seconds": age, "drawdown": 0.0, "checked_at": at, "window_seconds": 900,
+            "volume_usd": volume, "volume_window_seconds": 300}
 
 
 def test_the_tick_looks_at_held_coins_and_the_hottest_unheld_ones():
     settings = Settings()
     now = 100_000.0
     heat = {"DEAD": hot(0, None, now - 30), "WARM": hot(3, 120, now - 30), "HOT": hot(9, 10, now - 30),
-            "TEPID": hot(4, 300, now - 30), "STALE": hot(50, 5, now - 20_000)}
-    observable = ["DEAD", "WARM", "HOT", "TEPID", "STALE", "HELD", "UNREAD"]
+            "TEPID": hot(4, 300, now - 30), "STALE": hot(50, 5, now - 20_000), "THIN": hot(20, 5, now - 30, volume=900.0)}
+    observable = ["DEAD", "WARM", "HOT", "TEPID", "STALE", "HELD", "UNREAD", "THIN"]
     ledger = L(0, {"HELD": Decimal("5")}, heat)
     monitor = Map(settings, {"UNREAD": hot(1, 700, now)})
     seen = [_pick_product(observable, L(t, ledger.positions, heat), monitor, settings, now) for t in range(4)]
-    # Held first, then the hottest three; the dead, the tepid-but-fourth and the stale reading are not shown.
+    # Held first, then the hottest three; the dead, the stale reading and the busy-but-thin pool are not shown.
     assert seen == ["HELD", "HOT", "TEPID", "WARM"]
     # The unread coin was the one refreshed, once per tick.
     assert monitor.refreshed == ["UNREAD"] * 4
@@ -155,3 +157,40 @@ def test_the_tick_looks_at_held_coins_and_the_hottest_unheld_ones():
     assert _pick_product(["A", "B"], L(0, {}, cold), Map(settings, {}), settings, now) == "B"
     # Without activity tracking the old rotation stands.
     assert _pick_product(["A", "B"], L(1, {}, {}), None, settings, now) == "B"
+
+
+def swap_with_amounts(block, amount0, amount1=0):
+    data = amount0.to_bytes(32, "big", signed=True) + amount1.to_bytes(32, "big", signed=True) + bytes(32) * 4
+    return {"address": PM, "topics": [swap_topic(SWAP_V4), POOL_ID], "blockNumber": block, "logIndex": 0, "data": data}
+
+
+def test_a_buy_needs_dollars_through_the_pool_in_the_last_five_minutes(tmp_path):
+    """Four swaps of two million tokens each in the last five minutes (1200
+    blocks), one earlier that does not count. At $0.001 that is $8,000; at
+    $0.0005 it is $4,000 and the floor is $5,000. TOKEN is the lower address,
+    so it is currency0 and amount0 is the token leg."""
+    unit = 10**18
+    logs = [swap_with_amounts(98_000, 50_000_000 * unit)] + [
+        swap_with_amounts(b, -2_000_000 * unit if i % 2 else 2_000_000 * unit) for i, b in enumerate((99_000, 99_300, 99_600, 99_950))
+    ]
+    _, ledger, monitor = build(tmp_path, logs)
+    try:
+        h = monitor.heat("WOOF", V4_ENTRY, now=1000.0, price=D("0.001"))
+        assert h["swaps"] == 5 and h["volume_swaps"] == 4 and h["volume_usd"] == pytest.approx(8000.0)
+        ok, why = monitor.buyable("WOOF", V4_ENTRY, now=1000.0, price=D("0.001"))
+        assert ok and "$8,000 in the last 5 min" in why
+        assert ledger.get("heat")["WOOF"]["volume_usd"] == pytest.approx(8000.0)
+        monitor._cache.clear()
+        ok, why = monitor.buyable("WOOF", V4_ENTRY, now=1000.0, price=D("0.0005"))
+        assert not ok and why == "$4,000 traded in the last 5 min, floor $5,000"
+        monitor._cache.clear()
+        ok, why = monitor.buyable("WOOF", V4_ENTRY, now=1000.0)
+        assert not ok and why == "volume in the last 5 min cannot be priced"
+        # A cached reading taken without a price is priced once a price arrives.
+        priced = monitor.heat("WOOF", V4_ENTRY, now=1010.0, price=D("0.001"))
+        assert priced["volume_usd"] == pytest.approx(8000.0)
+        # Thin volume alone keeps a busy pool out of the lineup.
+        assert monitor.warm({**priced, "volume_usd": 4999.0}, now=1010.0) is False
+        assert monitor.warm(priced, now=1010.0) is True
+    finally:
+        ledger.close()

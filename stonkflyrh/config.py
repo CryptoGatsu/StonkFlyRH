@@ -149,6 +149,10 @@ class Settings:
     min_hot_swaps: int = 3
     max_last_swap_age_seconds: float = 600
     max_hot_drawdown: str = "0.25"
+    # Dollars traded through the pool in the volume window, from the token
+    # amounts in its swap events priced at the run's own quote. 0 disables.
+    volume_window_seconds: float = 300
+    min_volume_usd: str = "5000"
 
     # -- airdrop ------------------------------------------------------------
     # The operator's coin, sent from the deployer wallet to wallets that bought
@@ -289,6 +293,10 @@ class Settings:
             raise ValueError("max_last_swap_age_seconds must be a minute to a day")
         if not D(0) < D(self.max_hot_drawdown) <= D(1):
             raise ValueError("max_hot_drawdown must be a fraction between 0 and 1")
+        if not math.isfinite(self.volume_window_seconds) or not 60 <= self.volume_window_seconds <= 6 * 3600:
+            raise ValueError("volume_window_seconds must be a minute to 6 hours")
+        if D(self.min_volume_usd) < 0:
+            raise ValueError("min_volume_usd cannot be negative")
 
     def _check_airdrop(self):
         if type(self.airdrop_enabled) is not bool:

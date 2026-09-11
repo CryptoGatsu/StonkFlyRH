@@ -37,8 +37,10 @@ and still be empty by the time the brain says buy. So a buy asks the pool
 itself, fresh, about the last `hot_window_seconds` (15 minutes): at least
 `min_hot_swaps` (3) swaps, the last one no older than `max_last_swap_age_seconds`
 (10 minutes), and the price no more than `max_hot_drawdown` (25%) below the
-window's high. The fly's own swaps do not count. A pool whose events cannot be
-read is not bought: for a buy, unknown means no.
+window's high, and at least `min_volume_usd` ($5,000) traded in the last
+`volume_window_seconds` (5 minutes): the token amounts in the swaps, priced at
+the fly's own quote. The fly's own swaps do not count. A pool whose events
+cannot be read is not bought: for a buy, unknown means no.
 
 The same reading steers attention. Each tick the fly refreshes one coin's heat
 and looks at its held coins plus the three hottest unheld ones, so the brain is

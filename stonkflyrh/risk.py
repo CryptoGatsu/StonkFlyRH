@@ -190,7 +190,8 @@ class Guard:
             if self.activity is not None and self.s.activity_enabled:
                 # The screen's verdict can be a quarter of an hour old. A buy
                 # asks the pool what happened in the last few minutes.
-                ok, why = self.activity.buyable(product, self.l.universe().get(product) or {}, now)
+                ok, why = self.activity.buyable(product, self.l.universe().get(product) or {}, now,
+                                                price=(q.bid + q.ask) / 2)
                 if not ok:
                     raise Veto(f"{product} is not being traded right now: {why}")
             budget = min(order_limit, self.l.cash)
