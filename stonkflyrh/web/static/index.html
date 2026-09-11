@@ -750,7 +750,9 @@ const scene = (() => {
   el.addEventListener("pointerup", () => orbit.drag = false); el.addEventListener("pointercancel", () => orbit.drag = false);
   el.addEventListener("wheel", (e) => { e.preventDefault(); orbit.r = Math.min(12, Math.max(5, orbit.r + e.deltaY * 0.004)); place(); }, { passive: false });
 
-  let motion = !REDUCED, t = 0, twitchUntil = 0, drift = 0.0009;
+  // Motion is on by default, whatever the OS motion preference says; the
+  // button pauses it. Table row flashes still honour reduced motion.
+  let motion = true, t = 0, twitchUntil = 0, drift = 0.0009;
   $("motion").textContent = motion ? "Pause motion" : "Resume motion";
   $("motion").addEventListener("click", () => { motion = !motion; $("motion").textContent = motion ? "Pause motion" : "Resume motion"; if (motion) loop(); });
   function resize() {
