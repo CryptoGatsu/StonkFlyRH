@@ -637,13 +637,54 @@ def cmd_probe(a):
         report["permit2_allowance_to_router"] = {"amount_wei": str(allowed), "expiration": expiration, "now": int(time.time())}
     except Exception as e:
         report["approvals"] = failure(e)
-    # 3. the exact call the run would sign, simulated on each endpoint
-    call = venue.swap_call(entry["route"], quote, amount, 0, int(time.time()) + 600)
+    # 3. the exact call the run would sign, then its parts one at a time, so
+    #    a bare revert with no data still points at one contract.
+    from eth_abi import encode as abi_encode
+    from eth_utils import keccak
+
+    from . import v4 as v4mod
+
+    route = entry["route"]
+    call = venue.swap_call(route, quote, amount, 0, int(time.time()) + 600)
     data = call._encode_transaction_data()
-    tx = {"from": fly, "to": venue.router_address, "data": data}
     report["router"] = venue.router_address
     report["calldata_bytes"] = (len(data) - 2) // 2
     report["selector"] = data[:10]
+    pool_manager = venue.pool_manager
+    permit2 = venue.permit2_address
+    nobody = checksum("0x" + "de" * 20)
+
+    def sel(sig):
+        return "0x" + keccak(text=sig).hex()[:8]
+
+    def raw(fn_sig, types, values):
+        return sel(fn_sig) + abi_encode(types, values).hex()
+
+    cmds, inputs = v4mod.encode_exact_in_single(
+        route[0], checksum(quote) == route[0]["currency0"], amount, 0)
+    hop1 = venue.router.functions.execute(cmds, inputs, int(time.time()) + 600)._encode_transaction_data()
+    experiments = {
+        "full_route_buy": {"from": fly, "to": venue.router_address, "data": data},
+        "full_route_buy_with_3m_gas": {"from": fly, "to": venue.router_address, "data": data, "gas": 3_000_000},
+        "first_hop_only_usdg_to_eth": {"from": fly, "to": venue.router_address, "data": hop1},
+        "full_route_from_wallet_without_approvals": {"from": nobody, "to": venue.router_address, "data": data},
+        # Permit2 pulling USDG for the router: msg.sender must be the spender.
+        "permit2_transferFrom_as_router": {
+            "from": venue.router_address, "to": permit2,
+            "data": raw("transferFrom(address,address,uint160,address)",
+                        ["address", "address", "uint160", "address"], [fly, pool_manager, amount, checksum(quote)]),
+        },
+        # USDG itself, as Permit2 would call it.
+        "usdg_transferFrom_as_permit2": {
+            "from": permit2, "to": checksum(quote),
+            "data": raw("transferFrom(address,address,uint256)", ["address", "address", "uint256"],
+                        [fly, pool_manager, amount]),
+        },
+        "usdg_transfer_from_fly": {
+            "from": fly, "to": checksum(quote),
+            "data": raw("transfer(address,uint256)", ["address", "uint256"], [pool_manager, amount]),
+        },
+    }
     endpoints = {"primary": client.w3}
     try:
         from web3 import HTTPProvider, Web3
@@ -654,34 +695,39 @@ def cmd_probe(a):
         pass
     report["simulation"] = {}
     for name, w3 in endpoints.items():
-        try:
-            w3.eth.call(tx)
-            report["simulation"][name] = {"ok": True}
-        except Exception as e:
-            report["simulation"][name] = failure(e)
-        # From a wallet with no approvals: a different error here means the
-        # fly's own call got past the allowance checks before failing.
-        try:
-            w3.eth.call({**tx, "from": "0x" + "de" * 20})
-            report["simulation"][name + "_no_approvals"] = {"ok": True}
-        except Exception as e:
-            report["simulation"][name + "_no_approvals"] = failure(e)["decoded"]
-    # 4. a call trace, where the node offers one: the deepest frame that failed
+        results = {}
+        for label, tx in experiments.items():
+            try:
+                out = w3.eth.call(tx)
+                results[label] = {"ok": True, "returned": ("0x" + bytes(out).hex())[:74]}
+            except Exception as e:
+                results[label] = failure(e)
+        report["simulation"][name] = results
+    # 4. a call trace, where the node offers one
     report["trace"] = {}
+    tx = experiments["full_route_buy"]
     for name, w3 in endpoints.items():
         try:
             trace = w3.manager.request_blocking("debug_traceCall", [tx, "latest", {"tracer": "callTracer"}])
         except Exception as e:
             report["trace"][name] = {"unavailable": redact(e)[:160]}
             continue
+        if not isinstance(trace, dict):
+            report["trace"][name] = {"shape": type(trace).__name__, "preview": redact(trace)[:200]}
+            continue
+        if "structLogs" in trace:
+            logs_ = trace.get("structLogs") or []
+            report["trace"][name] = {"tracer": "opcodes", "failed": trace.get("failed"), "gas": trace.get("gas"),
+                                     "last_ops": [{k: l.get(k) for k in ("pc", "op", "depth")} for l in logs_[-4:]]}
+            continue
         path = []
         node = trace
         while isinstance(node, dict):
             path.append({k: (node.get(k)[:74] if isinstance(node.get(k), str) else node.get(k))
-                         for k in ("to", "type", "error", "revertReason", "output") if node.get(k) is not None})
+                         for k in ("to", "type", "error", "revertReason", "output", "gasUsed") if node.get(k) is not None})
             calls = [c for c in (node.get("calls") or []) if c.get("error") or c.get("revertReason")]
             node = calls[-1] if calls else None
-        report["trace"][name] = path[-6:]
+        report["trace"][name] = {"keys": sorted(trace.keys())[:10], "failing_path": path[-8:]}
     print(json.dumps(report, indent=2, default=str))
 
 
