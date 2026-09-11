@@ -100,6 +100,13 @@
   @media (max-width: 560px) { .cards { grid-template-columns: 1fr; } }
   .card { border: 1px solid var(--line); background: var(--raise); padding: 14px 16px; min-width: 0; }
   .card.watch { border-color: var(--lime); }
+  .s-tools { display: flex; gap: 10px; align-items: center; margin: 8px 0 10px; }
+  .s-search { flex: 1; min-width: 0; background: var(--raise); color: var(--ink); border: 1px solid var(--line); padding: 8px 10px; font: 12px/1.2 var(--mono); }
+  .s-search:focus { outline: none; border-color: var(--lime); }
+  .s-group { font: 700 9px/1 var(--pixel); letter-spacing: .12em; color: var(--muted); margin: 14px 0 6px; text-transform: uppercase; }
+  .s-group summary { cursor: pointer; list-style: none; } .s-group summary::-webkit-details-marker { display: none; }
+  .s-group summary::before { content: "▸ "; } .s-group[open] summary::before { content: "▾ "; }
+  .verdict.dim { opacity: .75; }
   .watchlist { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
   @media (max-width: 720px) { .watchlist { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .w-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line-soft); background: var(--raise); padding: 8px 10px; min-width: 0; }
@@ -280,6 +287,10 @@
           <div class="empty" id="decisions-empty">Waiting for the worker to write its first tick…</div>
         </div>
         <div class="pane" id="pane-screen" hidden>
+          <div class="s-tools">
+            <input class="s-search" id="screen-search" type="search" placeholder="Search symbol or address" autocomplete="off" spellcheck="false">
+            <span class="k" id="screen-count"></span>
+          </div>
           <div id="screens"><div class="empty">No token has been screened yet.</div></div>
         </div>
         <div class="pane" id="pane-universe" hidden>
@@ -470,17 +481,35 @@ function renderLimits() {
     : `<span class="pill">empty</span>`;
 }
 
-function renderScreens() {
-  const entries = Object.entries(meta.screens || {});
-  if (!entries.length) { $("screens").innerHTML = `<div class="empty">No token has been screened yet.</div>`; return; }
-  $("screens").innerHTML = entries.map(([product, v]) => {
-    const chips = (v.checks || []).map((c) => `<span class="pill ${c.passed ? "ok" : "no"}" title="${esc(c.detail)}">${esc(c.name)}</span>`).join("");
-    const failed = (v.checks || []).filter((c) => !c.passed);
-    const why = v.error ? "screen could not complete: " + esc(v.error) : failed.map((c) => `${esc(c.name)}: ${esc(c.detail)}`).join(" · ");
-    return `<div class="verdict"><div class="head"><b>${esc(product)}</b>${v.approved ? `<span class="pill ok">clear to buy</span>` : `<span class="pill no">buy withheld</span>`}</div>
-      <div class="chips">${chips}</div>${why ? `<div class="why">${why}</div>` : ""}</div>`;
-  }).join("");
+let screenQuery = "";
+function verdictBlock(product, v, dim) {
+  const chips = (v.checks || []).map((c) => `<span class="pill ${c.passed ? "ok" : "no"}" title="${esc(c.detail)}">${esc(c.name)}</span>`).join("");
+  const failed = (v.checks || []).filter((c) => !c.passed);
+  const why = v.error ? "screen could not complete: " + esc(v.error) : failed.map((c) => `${esc(c.name)}: ${esc(c.detail)}`).join(" · ");
+  const addr = v.address ? `<span class="k" style="display:inline;margin-left:8px">${explorer ? `<a href="${esc(explorer)}/address/${esc(v.address)}" target="_blank" rel="noopener">${shortHash(v.address)}</a>` : shortHash(v.address)}</span>` : "";
+  const when = v.checked_at ? `<span class="k" style="display:inline;margin-left:auto">${ago(v.checked_at)}</span>` : "";
+  return `<div class="verdict${dim ? " dim" : ""}"><div class="head"><b>${esc(product)}</b>${addr}${when}${v.approved ? `<span class="pill ok">clear to buy</span>` : `<span class="pill no">buy withheld</span>`}</div>
+    <div class="chips">${chips}</div>${why ? `<div class="why">${why}</div>` : ""}</div>`;
 }
+
+function renderScreens() {
+  const all = Object.entries(meta.screens || {});
+  if (!all.length) { $("screens").innerHTML = `<div class="empty">No token has been screened yet.</div>`; $("screen-count").textContent = ""; return; }
+  const q = screenQuery.trim().toLowerCase();
+  const matches = ([product, v]) => !q || product.toLowerCase().includes(q) || (v.address || "").toLowerCase().includes(q);
+  const universe = new Set(Object.keys(meta.universe || {}));
+  const bySymbol = (a, b) => a[0].localeCompare(b[0]);
+  const inU = all.filter(([p]) => universe.has(p)).filter(matches).sort(bySymbol);
+  const rest = all.filter(([p]) => !universe.has(p)).filter(matches).sort((a, b) => (b[1].checked_at || 0) - (a[1].checked_at || 0));
+  $("screen-count").textContent = `${all.length} screened · ${universe.size} in the universe`;
+  if (!inU.length && !rest.length) { $("screens").innerHTML = `<div class="empty">Nothing matches "${esc(screenQuery)}".</div>`; return; }
+  const top = inU.length ? `<div class="s-group">In the universe · ${inU.length}</div>` + inU.map(([p, v]) => verdictBlock(p, v, false)).join("") : "";
+  // Withheld and dropped tokens fold away unless a search asks for them.
+  const restBlocks = rest.map(([p, v]) => verdictBlock(p, v, true)).join("");
+  const folded = rest.length ? `<details class="s-group"${q ? " open" : ""}><summary>Withheld or dropped · ${rest.length}</summary>${restBlocks}</details>` : "";
+  $("screens").innerHTML = top + folded;
+}
+$("screen-search").addEventListener("input", (e) => { screenQuery = e.target.value; renderScreens(); });
 
 function renderUniverse() {
   const universe = meta.universe || {};
