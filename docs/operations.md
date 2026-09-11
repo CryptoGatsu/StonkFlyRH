@@ -186,6 +186,10 @@ standard tiers, and when a launch pairs with an asset it does not know (GOOGL, s
 asks for a USDG pool of that asset too, at most once per 20,000 blocks. A launch paired
 with an asset that has no bridge yet waits, and is routed the moment one appears.
 
+Each scan gets `discovery_budget_seconds` (25 s) of the tick: fetching may use half,
+screening the rest, and whatever is left over waits for the next scan. A backlog is
+worked off over many ticks rather than by one long one, so prices keep being observed.
+
 Pons initialises a token's v4 pool when the token is created and adds the liquidity at
 graduation. A candidate whose pool is empty is not rejected: it goes back in the queue
 and is screened again every `min_pool_age_seconds` for up to 48 tries.

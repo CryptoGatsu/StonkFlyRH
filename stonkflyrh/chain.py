@@ -308,6 +308,9 @@ class ChainClient:
 
             w3 = Web3(HTTPProvider(rpc or rpc_url(net), request_kwargs={"timeout": 15}))
         self.w3 = w3
+        # Between log windows: the public endpoint rate-limits hard; a
+        # dedicated one (STONKFLYRH_RPC_URL) needs only a token pause.
+        self.pause = 0.15 if os.environ.get("STONKFLYRH_RPC_URL") else 0.6
         reported = int(w3.eth.chain_id)
         if reported != net.chain_id:
             raise RuntimeError(
@@ -398,7 +401,7 @@ class ChainClient:
         except Exception:
             return None
 
-    def logs(self, params, chunk=2000, pause=0.6, retries=8, max_blocks=None):
+    def logs(self, params, chunk=2000, pause=None, retries=8, max_blocks=None):
         """eth_getLogs over a block range the public RPC will actually serve.
 
         Public endpoints rate-limit and cap the range per call. This walks the
@@ -409,6 +412,8 @@ class ChainClient:
         """
         import time as _time
 
+        if pause is None:
+            pause = getattr(self, "pause", 0.6)
         lo = int(params["fromBlock"])
         hi = int(params["toBlock"])
         if max_blocks is not None:

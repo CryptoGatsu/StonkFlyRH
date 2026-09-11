@@ -100,6 +100,16 @@
   @media (max-width: 560px) { .cards { grid-template-columns: 1fr; } }
   .card { border: 1px solid var(--line); background: var(--raise); padding: 14px 16px; min-width: 0; }
   .card.watch { border-color: var(--lime); }
+  .watchlist { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  @media (max-width: 720px) { .watchlist { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .w-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line-soft); background: var(--raise); padding: 8px 10px; min-width: 0; }
+  .w-row.watch { border-color: var(--lime); }
+  .w-row.rug { border-color: #5b1f2d; opacity: .7; }
+  .w-row .tile { width: 22px; height: 22px; display: grid; place-items: center; font: 700 10px/1 var(--pixel); color: var(--bg); flex: 0 0 auto; }
+  .w-row .sym { font: 700 9px/1 var(--pixel); letter-spacing: .08em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .w-row .px { color: var(--muted); font-size: 11px; margin-top: 3px; white-space: nowrap; }
+  .w-row .eye { margin-left: auto; font: 700 7px/1 var(--pixel); letter-spacing: .1em; color: var(--lime); flex: 0 0 auto; }
+  .w-row .eye.rug { color: var(--pink); }
   .card .top { display: flex; gap: 10px; align-items: center; }
   .card .tile { width: 32px; height: 32px; display: grid; place-items: center; font: 700 14px/1 var(--pixel); color: var(--bg); flex: 0 0 auto; }
   .card .sym { font: 700 11px/1 var(--pixel); letter-spacing: .1em; }
@@ -240,6 +250,8 @@
 
         <div class="row-head"><span class="label ink">Currently holding</span><span class="right" id="invested">—</span></div>
         <div class="cards" id="cards"></div>
+        <div class="row-head" id="watch-head" style="margin-top:14px" hidden><span class="label ink">Watching</span><span class="right" id="watch-count">—</span></div>
+        <div class="watchlist" id="watchlist" hidden></div>
 
         <hr class="rule">
         <div class="row-head"><span class="label ink" style="font-size:11px">Live prices</span><a class="label" id="audit" href="/api/state" target="_blank" rel="noopener" style="color:var(--lime)">Audit ↗</a></div>
@@ -390,6 +402,7 @@ function renderBag() {
   }
   let invested = 0;
   const products = Object.keys(meta.universe || {}).length ? Object.keys(meta.universe) : (settings.products || Object.keys(positions));
+  const watch = [];
   for (const sym of products) {
     const held = Number(positions[sym] ?? 0);
     const q = latestByProduct[sym] && latestByProduct[sym].quote;
@@ -400,6 +413,14 @@ function renderBag() {
     const delta = Number.isFinite(entry) && held > 0 && Number.isFinite(mid) ? (mid - entry) * held : NaN;
     const watching = lastRow && lastRow.product === sym;
     const blocked = (meta.blocklist || []).some((b) => b.product === sym);
+    if (!(held > 0)) {
+      // Not held: one compact row in the watchlist, not a card.
+      watch.push(`<div class="w-row${blocked ? " rug" : watching ? " watch" : ""}" title="${esc(sym)}">
+        <div class="tile" style="background:${tileColor(sym)}">${esc(sym[0])}</div>
+        <div style="min-width:0"><div class="sym">${esc(sym)}</div><div class="px">${Number.isFinite(mid) ? usd(mid, mid < 0.01 ? 8 : 4) : "—"}</div></div>
+        ${blocked ? `<span class="eye rug">RUGGED</span>` : watching ? `<span class="eye">WATCHING</span>` : ""}</div>`);
+      continue;
+    }
     cards.push(`<div class="card${watching ? " watch" : ""}">
       <div class="top"><div class="tile" style="background:${tileColor(sym)}">${esc(sym[0])}</div>
         <div><div class="sym">${esc(sym)}</div><div class="price">${Number.isFinite(mid) ? usd(mid, mid < 0.01 ? 8 : 4) : "—"} / coin</div></div>
@@ -409,6 +430,9 @@ function renderBag() {
     </div>`);
   }
   $("cards").innerHTML = cards.join("");
+  $("watch-head").hidden = $("watchlist").hidden = !watch.length;
+  $("watch-count").textContent = `${watch.length} token${watch.length === 1 ? "" : "s"} · not held`;
+  $("watchlist").innerHTML = watch.join("");
   $("invested").textContent = Number.isFinite(eq) ? Math.round(invested / eq * 100) + "% invested" : "—";
 }
 

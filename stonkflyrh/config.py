@@ -101,6 +101,10 @@ class Settings:
     # -- discovery ----------------------------------------------------------
     discovery_enabled: bool = True
     discovery_interval_seconds: float = 600
+    # Most wall-clock seconds one scan may take from a tick. Whatever is left
+    # (more log windows, more candidates) waits for the next scan, so prices
+    # keep being observed while a backlog is worked off.
+    discovery_budget_seconds: float = 25
     discovery_lookback_blocks: int = 400000
     discovery_batch: int = 12
     max_products: int = 12
@@ -256,6 +260,8 @@ class Settings:
             raise ValueError("discovery_enabled is a flag")
         if not math.isfinite(self.discovery_interval_seconds) or self.discovery_interval_seconds < 60:
             raise ValueError("Discovery runs at most once a minute")
+        if not math.isfinite(self.discovery_budget_seconds) or not 5 <= self.discovery_budget_seconds <= 300:
+            raise ValueError("Discovery budget must be 5-300 seconds a scan")
         if type(self.discovery_lookback_blocks) is not int or not 0 <= self.discovery_lookback_blocks <= 5_000_000:
             raise ValueError("Discovery lookback must be 0-5,000,000 blocks")
         if type(self.discovery_batch) is not int or not 1 <= self.discovery_batch <= 50:

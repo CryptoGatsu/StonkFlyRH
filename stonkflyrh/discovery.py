@@ -215,7 +215,11 @@ class PoolDiscovery:
         so a candidate whose screen failed on a network error is still queued
         on the next scan.
         """
+        import time as _time
+
         self.last_scan = now
+        budget = float(getattr(self.s, "discovery_budget_seconds", 25))
+        self._deadline = _time.monotonic() + budget
         head = int(self.client.w3.eth.block_number)
         start = self.l.get("discovery_block")
         if start is None:
@@ -230,21 +234,29 @@ class PoolDiscovery:
             "skipped": 0,
         }
         if head > start:
+            # Fetching may use half the budget; screening gets the rest.
+            self._fetch_deadline = _time.monotonic() + budget / 2
             scanned_to = self._fetch(start, head, report)
             report["to_block"] = scanned_to
             report["backlog_blocks"] = head - scanned_to
         else:
             report["backlog_blocks"] = 0
         self._screen_pending(now, eth_usd, report)
+        report["seconds"] = round(budget - (self._deadline - _time.monotonic()), 1)
         report["pending"] = len(self.l.get("pending_candidates") or [])
         self.l.record_discovery(report)
         return report
 
     def _fetch(self, start, head, report):
         quote = self.registry.quote_address
+        import time as _time
+
         limit = min(head, start + self.MAX_BLOCKS_PER_SCAN)
         scanned_to = start
+        fetch_deadline = getattr(self, "_fetch_deadline", None)
         while scanned_to < limit:
+            if fetch_deadline is not None and scanned_to > start and _time.monotonic() > fetch_deadline:
+                break  # out of time for this scan; the rest is next scan's
             lo = scanned_to + 1
             hi = min(limit, scanned_to + self.WINDOW)
             candidates = []
@@ -343,8 +355,16 @@ class PoolDiscovery:
         # cap; otherwise the newest launch first.
         ready.sort(key=lambda c: (0 if c["token"] == coin else 1, -c["block"]))
         batch, rest = ready[: int(self.s.discovery_batch)], ready[int(self.s.discovery_batch):]
+        import time as _time
+
+        deadline = getattr(self, "_deadline", None)
         retried = []
         for i, c in enumerate(batch):
+            if deadline is not None and i > 0 and _time.monotonic() > deadline:
+                # Out of time: everything from here stays queued for next scan.
+                self.l.put("pending_candidates", (batch[i:] + rest + waiting + retried)[-500:])
+                report["deferred"] = len(batch) - i
+                return
             if room <= 0 and c["token"] != coin:
                 report["rejected"].append({"address": c["token"], "reason": "universe full"})
                 self.l.mark_candidate(c["token"], "universe full", now)

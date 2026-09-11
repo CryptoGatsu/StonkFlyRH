@@ -412,3 +412,34 @@ def test_a_candidate_whose_screen_failed_stays_queued(tmp_path):
         assert ledger.get("pending_candidates") == []
     finally:
         ledger.close()
+
+
+def test_a_scan_stops_at_its_time_budget_and_leaves_the_rest_queued(tmp_path, monkeypatch):
+    """A long backlog must not starve price observation: fetching stops after
+    the window that crosses half the budget, screening after the candidate that
+    crosses the whole budget, and both resume on the next scan."""
+    import itertools
+    import time as _time
+
+    logs = [log_for(addr(70 + i), 500 + i * 10) for i in range(4)]
+    ids = {addr(70 + i): (f"T{i}", 18) for i in range(4)}
+    chain = Chain(logs, 30000, ids)
+    _, ledger, _, _, disc = build(tmp_path, chain, discovery_lookback_blocks=30000,
+                                  discovery_budget_seconds=10)
+    # Every look at the clock is 3 seconds later than the last.
+    clock = itertools.count(0, 3)
+    monkeypatch.setattr(_time, "monotonic", lambda: next(clock))
+    try:
+        report = disc.scan(time.time(), ETH_USD)
+        assert report["to_block"] < 30000                     # did not finish the fetch
+        assert report["candidates"] == 4 and report["deferred"] >= 1
+        assert len(report["added"]) + report["deferred"] == 4
+        pending = ledger.get("pending_candidates")
+        assert len(pending) == report["deferred"]
+        monkeypatch.setattr(_time, "monotonic", lambda: 0.0)     # a scan with all the time it needs
+        second = disc.scan(time.time() + 61, ETH_USD)
+        assert second["from_block"] == report["to_block"]
+        assert ledger.get("pending_candidates") == []
+        assert len(ledger.universe()) == 5                    # PONS plus four tokens
+    finally:
+        ledger.close()
