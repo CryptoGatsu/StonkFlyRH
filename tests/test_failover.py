@@ -24,7 +24,7 @@ class Answer:
 
 def build(primary, fallback):
     p = FailoverProvider("https://primary.invalid/", "https://public.invalid/")
-    p.primary, p.fallback = primary, fallback
+    p._ask_primary, p.fallback = primary.make_request, fallback
     p._sleep = lambda s: None
     clock = {"t": 1000.0}
     p._now = lambda: clock["t"]
@@ -47,6 +47,15 @@ def test_a_429_is_retried_then_answered_by_the_fallback_and_the_primary_rests(ca
     primary.fails = 0
     assert p.make_request("eth_gasPrice", [])["result"] == "eth_gasPrice:4"
     assert p.rested_until == 0.0
+
+
+def test_web3_accepts_the_provider_and_reads_through_the_fallback():
+    from web3 import Web3
+
+    primary, fallback = Answer(fails=99), Answer()
+    p, _ = build(primary, fallback)
+    fallback.make_request = lambda method, params: {"jsonrpc": "2.0", "id": 1, "result": "0x1237"}
+    assert Web3(p).eth.chain_id == 4663 and primary.calls == 3
 
 
 def test_a_revert_is_not_a_reason_to_switch():

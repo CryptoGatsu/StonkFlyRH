@@ -330,76 +330,87 @@ def build_provider(net, rpc=None):
     return FailoverProvider(primary, fallback, request_kwargs={"timeout": 15})
 
 
-class FailoverProvider:
-    """Two HTTP providers wearing one face. Every request goes to the primary;
-    one that comes back throttled is retried briefly, then answered by the
-    fallback, and the primary is rested for `cooloff` seconds so a quota that
-    is spent is not hammered. Neither URL is ever printed: a hosted endpoint's
-    URL is its credential."""
+_FAILOVER = None
 
-    COOLOFF_SECONDS = 60.0
-    RETRIES = 2
 
-    def __init__(self, primary, fallback, request_kwargs=None):
-        from web3 import HTTPProvider
+def _failover_class():
+    """Built on first use so importing this module does not import web3."""
+    global _FAILOVER
+    if _FAILOVER is not None:
+        return _FAILOVER
+    from web3 import HTTPProvider
 
-        kw = {"request_kwargs": request_kwargs or {"timeout": 15}}
-        self.primary = HTTPProvider(primary, **kw)
-        self.fallback = HTTPProvider(fallback, **kw)
-        self.endpoint_uri = self.primary.endpoint_uri
-        self.rested_until = 0.0
-        self.switches = 0
+    class _Failover(HTTPProvider):
+        """Two HTTP endpoints behind one provider. Every request goes to the
+        primary; one that comes back throttled is retried briefly, then
+        answered by the fallback, and the primary is rested for a minute so a
+        quota that is spent is not hammered. Neither URL is ever printed: a
+        hosted endpoint's URL is its credential."""
 
-    # web3 asks the provider for these; delegate to the primary.
-    def __getattr__(self, name):
-        return getattr(self.primary, name)
+        COOLOFF_SECONDS = 60.0
+        RETRIES = 2
 
-    def _sleep(self, seconds):
-        import time as _time
+        def __init__(self, primary, fallback, request_kwargs=None):
+            kw = request_kwargs or {"timeout": 15}
+            super().__init__(primary, request_kwargs=kw)
+            self.fallback = HTTPProvider(fallback, request_kwargs=kw)
+            self.rested_until = 0.0
+            self.switches = 0
 
-        _time.sleep(seconds)
+        def _ask_primary(self, method, params):
+            return super().make_request(method, params)
 
-    def _now(self):
-        import time as _time
+        def _sleep(self, seconds):
+            import time as _time
 
-        return _time.monotonic()
+            _time.sleep(seconds)
 
-    def make_request(self, method, params):
-        if self._now() < self.rested_until:
+        def _now(self):
+            import time as _time
+
+            return _time.monotonic()
+
+        def make_request(self, method, params):
+            if self._now() < self.rested_until:
+                try:
+                    return self.fallback.make_request(method, params)
+                except Exception as e:
+                    if not _throttled(e):
+                        raise
+                    # Both are struggling; the primary gets its chance below.
+            last = None
+            for attempt in range(self.RETRIES + 1):
+                try:
+                    response = self._ask_primary(method, params)
+                    self.rested_until = 0.0
+                    return response
+                except Exception as e:
+                    if not _throttled(e):
+                        raise
+                    last = e
+                    if attempt < self.RETRIES:
+                        self._sleep(0.4 * 2**attempt)
+            self.rested_until = self._now() + self.COOLOFF_SECONDS
+            self.switches += 1
+            print(json.dumps({"rpc": "fallback", "for_seconds": self.COOLOFF_SECONDS, "method": str(method),
+                              "primary_answered": _status_of(last)}), flush=True)
+            return self.fallback.make_request(method, params)
+
+        def make_batch_request(self, requests):
             try:
-                return self.fallback.make_request(method, params)
+                return super().make_batch_request(requests)
             except Exception as e:
                 if not _throttled(e):
                     raise
-                # Both are struggling; the primary gets its chance below.
-        last = None
-        for attempt in range(self.RETRIES + 1):
-            try:
-                response = self.primary.make_request(method, params)
-                self.rested_until = 0.0
-                return response
-            except Exception as e:
-                if not _throttled(e):
-                    raise
-                last = e
-                if attempt < self.RETRIES:
-                    self._sleep(0.4 * 2**attempt)
-        self.rested_until = self._now() + self.COOLOFF_SECONDS
-        self.switches += 1
-        print(json.dumps({"rpc": "fallback", "for_seconds": self.COOLOFF_SECONDS, "method": str(method),
-                          "primary_answered": _status_of(last)}), flush=True)
-        return self.fallback.make_request(method, params)
+                return self.fallback.make_batch_request(requests)
 
-    def make_batch_request(self, requests):
-        try:
-            return self.primary.make_batch_request(requests)
-        except Exception as e:
-            if not _throttled(e):
-                raise
-            return self.fallback.make_batch_request(requests)
+    _FAILOVER = _Failover
+    return _FAILOVER
 
-    def is_connected(self, show_traceback=False):
-        return self.primary.is_connected(show_traceback) or self.fallback.is_connected(show_traceback)
+
+def FailoverProvider(primary, fallback, request_kwargs=None):
+    """A web3 provider: the dedicated endpoint with the public one behind it."""
+    return _failover_class()(primary, fallback, request_kwargs)
 
 
 class ChainClient:
