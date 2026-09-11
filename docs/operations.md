@@ -132,6 +132,23 @@ the network's public RPC when that is unset, for the rest of the process; quotes
 balances and transactions stay on the dedicated endpoint. The journal notes the switch
 once as `logs_provider: fallback`.
 
+## How eager the brain is
+
+Every observation the fly renders the chart to its visual system and reads two things
+from the connectome's descending neurons: a spike count from a **gate** population and
+the mean firing-rate difference between a right and a left population. It acts only
+when the gate spiked at least once during the observation and the difference clears
+`decoder_threshold_hz`. Two knobs move this, both tunable on restart:
+
+- `STONKFLYRH_NEURAL_MS` (500): the observation window in brain milliseconds. Longer
+  collects more spikes, so the gate opens more often and the rate estimate is finer.
+- `STONKFLYRH_DECODER_HZ` (2): the rate difference a decision needs. Lower is more
+  eager.
+
+More eagerness means more trades and more round-trip fees paid, about 7% per round
+trip on Pons pools, so a trade needs a move bigger than that to make money. The brain
+only learns from trades it makes: no trades, no reinforcement, no learning.
+
 ## Changing settings on a running ledger
 
 Restarting with a changed `.env` is fine for tuning values: order size, screen

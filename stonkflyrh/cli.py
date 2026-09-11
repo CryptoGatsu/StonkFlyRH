@@ -179,6 +179,7 @@ def settings_from(args, net_key):
         max_pool_usd=os.environ.get("STONKFLYRH_MAX_POOL_USD", "1000"),
         neural_ms=args.neural_ms,
         pulse_ms=min(200, args.neural_ms / 2),
+        decoder_threshold_hz=float(os.environ.get("STONKFLYRH_DECODER_HZ", "2")),
     )
 
 
@@ -435,7 +436,10 @@ def cmd_start(a, parser):
     r.products = list(products)
     r.capital_usd = os.environ.get("STONKFLYRH_CAPITAL_USD", "100")
     r.order_limit_usd = os.environ.get("STONKFLYRH_ORDER_USD", "10")
-    r.neural_ms = 500
+    # How eager the brain is. A longer observation window gathers more spikes
+    # (so the gate opens more often); a lower decoder threshold lets a smaller
+    # left/right difference count as a signal.
+    r.neural_ms = float(os.environ.get("STONKFLYRH_NEURAL_MS", "500"))
     say("run", {"mode": mode, "out": str(out), "capital_usd": r.capital_usd,
                 "order_limit_usd": r.order_limit_usd,
                 "site": "python -m stonkflyrh serve --out " + str(out)})
