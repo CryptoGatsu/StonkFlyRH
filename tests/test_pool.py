@@ -242,3 +242,23 @@ def test_reassigning_more_than_the_operator_holds_is_refused(pool):
     p, _ = pool
     with pytest.raises(ValueError, match="does not cover"):
         p.reassign(ALICE, D("500"), D("100"), 1, "0xdef")
+
+
+def test_a_refund_removes_the_donor_and_the_operator_absorbs_any_difference(pool):
+    p, ledger = pool
+    p.deposit(ALICE, D("300"), D("100"), 1, tx_hash="0x1")
+    p.deposit(BOB, D("50"), D("400"), 2, tx_hash="0x2")
+    # The pool has lost a little: $450 in, $445 now. Alice's stake is worth less than $300.
+    equity = D("445")
+    nav_before, bob_before, op_before = p.nav(equity), value(p, BOB, equity), value(p, OPERATOR, equity)
+    out = p.refund(ALICE, equity, 3, amount=D("300"))
+    assert close(out["value"], D("300") * equity / D("450")) and out["amount"] == D("300")
+    assert p.participant(ALICE) is None and [x["address"] for x in p.participants()] == [OPERATOR, BOB]
+    after = equity - D("300")  # the cash has left with the transfer
+    # NAV and Bob are exactly where they were; the operator paid the $3.33 gap.
+    assert close(p.nav(after), nav_before) and close(value(p, BOB, after), bob_before)
+    assert close(value(p, OPERATOR, after), op_before - (D("300") - out["value"]))
+    with pytest.raises(ValueError, match="holds no donor stake"):
+        p.refund(OPERATOR, after, 4)
+    with pytest.raises(ValueError, match="exceeds the operator's stake"):
+        p.refund(BOB, after, 5, amount=D("1000"))

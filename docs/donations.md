@@ -81,3 +81,21 @@ books from that point. It is idempotent per transfer. Stop the worker first, or 
 between ticks; the write is short.
 
 The DONORS tab on the site shows the same, live.
+
+
+## Refunding a donor
+
+```sh
+systemctl stop stonkflyrh-worker
+cd /opt/stonkflyrh && sudo -u stonkfly .venv/bin/python -m stonkflyrh donors --out runs/live --refund 0xDONOR
+sudo -u stonkfly .venv/bin/python -m stonkflyrh donors --out runs/live --refund 0xDONOR --amount 300 --send
+systemctl start stonkflyrh-worker
+```
+
+The first call shows the plan: what they deposited, what their units are worth at
+today's NAV, what will be sent and what the operator absorbs if the two differ. With
+`--send` the USDG leaves the fly wallet, the donor's units leave the pool and the
+ledger's cash falls by the same amount, so the worker's balance check agrees when it
+restarts. Never send from the fly wallet by hand: the worker halts on a balance it did
+not move. Without `--amount` the refund is the stake's current value; with it, a
+round-number refund of what they sent, any shortfall coming out of the operator's stake.

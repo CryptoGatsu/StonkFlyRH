@@ -254,6 +254,36 @@ class Pool:
             self._write(op)
         return {"address": address, "gain": gain, "payout": payout, "fee": fee, "nav": nav}
 
+    def refund(self, address, equity, now, amount=None):
+        """Hand a donor their stake back and remove them from the pool.
+
+        Their units leave at today's NAV. `amount` may be set (a round-number
+        refund of what they sent); the difference against the units' value is
+        taken from, or added to, the operator's units so NAV, and every other
+        donor's value, is exactly what it was. Pair this with
+        `ledger.withdraw(amount)` once the transfer has gone out.
+        """
+        p = self.participant(address)
+        if p is None or p["address"] == OPERATOR:
+            raise ValueError(f"{address} holds no donor stake in this pool")
+        nav = self.nav(equity)
+        value = p["units"] * nav
+        amount = D(amount) if amount is not None else value
+        if amount <= 0:
+            raise ValueError("A refund must be positive")
+        op = self.participant(OPERATOR)
+        if op is None:
+            raise ValueError("The pool has no operator stake to settle the refund against")
+        gap_units = (amount - value) / nav
+        if op["units"] - gap_units < 0:
+            raise ValueError("The refund exceeds the operator's stake")
+        op["units"] -= gap_units
+        with self.l.transaction():
+            self.db.execute("DELETE FROM participants WHERE address=?", (address,))
+            self._write(op)
+        return {"address": address, "units": p["units"], "value": value, "amount": amount, "nav": nav,
+                "deposited": p["deposited"], "paid_out": p["paid_out"], "at": now}
+
     # -- payouts (money leaving) ----------------------------------------------
 
     def record_payout(self, address, amount_wei, gain, now):

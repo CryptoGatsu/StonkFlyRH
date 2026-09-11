@@ -67,6 +67,14 @@ def build_parser():
         help="Book a USDG transfer that arrived before the run started as a donation "
              "from its sender (the money is moved out of the operator's stake)",
     )
+    donors.add_argument(
+        "--refund",
+        metavar="ADDRESS",
+        help="Send a donor their stake back in USDG and remove them from the pool. "
+             "Shows the plan; add --send to transfer. The worker must be stopped.",
+    )
+    donors.add_argument("--amount", help="Refund this many USDG instead of the stake's current value")
+    donors.add_argument("--send", action="store_true", help="With --refund: actually transfer")
     donors.add_argument("--network", choices=sorted(NETWORKS), default=None)
     donors.add_argument("--tokens", type=Path)
 
@@ -528,6 +536,87 @@ def cmd_discovery(a):
     }, indent=2))
 
 
+def _worker_running(out):
+    """True when the worker holds the run's lock."""
+    path = out / "worker.lock"
+    if not path.exists():
+        return False
+    with path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    return False
+
+
+def _refund_donor(a, settings, meta, ledger, pool, equity):
+    """Send a donor their money back and take them out of the books: the USDG
+    leaves the fly wallet, the donor's units leave the pool, and the ledger's
+    cash falls by the same amount so the next balance check agrees."""
+    from .chain import checksum
+
+    if meta["mode"] != "live":
+        raise RuntimeError("Only a live run holds donor money")
+    if _worker_running(a.out):
+        raise RuntimeError("Stop the worker first: systemctl stop stonkflyrh-worker")
+    if ledger.pending():
+        raise RuntimeError("An order is unresolved; reconcile it before moving money")
+    address = checksum(a.refund)
+    p = pool.participant(address)
+    if p is None:
+        known = [x["address"] for x in pool.participants() if x["address"] != "operator"]
+        raise RuntimeError(f"{address} holds no donor stake. Donors: {', '.join(known) or 'none'}")
+    nav = pool.nav(equity)
+    value = p["units"] * nav
+    amount = D(a.amount) if a.amount else value
+    if amount <= 0:
+        raise RuntimeError("Nothing to refund")
+    if amount > ledger.cash:
+        raise RuntimeError(f"Refund ${amount:.2f} exceeds the fly's cash ${ledger.cash:.2f}; sell first")
+    plan = {
+        "refund": address,
+        "deposited": str(p["deposited"]),
+        "paid_out_so_far": str(p["paid_out"]),
+        "stake_value_now": str(value.quantize(D("0.01"))),
+        "amount": str(amount.quantize(D("0.01"))),
+        "operator_absorbs": str((amount - value).quantize(D("0.01"))),
+        "nav": str(nav.quantize(D("0.000001"))),
+    }
+    if not a.send:
+        print(json.dumps({**plan, "dry_run": True, "note": "add --send to transfer"}, indent=2))
+        return
+    from .payouts import send_quote_token
+    from .wallet import address as wallet_address
+    from .wallet import load
+
+    _, client, registry, _ = chain_context(a.network, a.tokens, [])
+    account = load("trading")
+    fly = wallet_address("trading") or FLY_WALLET
+    token = client.erc20(registry.quote_address)
+    amount_wei = to_wei(amount, registry.quote_decimals)
+    balance = int(token.functions.balanceOf(checksum(fly)).call())
+    if balance < amount_wei:
+        raise RuntimeError("The fly wallet holds less USDG than the refund")
+    now = time.time()
+    record = {**plan, "at": now, "status": "PLANNED", "tx_hash": None}
+
+    def mark(status, tx_hash=None):
+        record.update({"status": status, "tx_hash": tx_hash or record["tx_hash"]})
+        ledger.record_event("refunds", dict(record))
+
+    result = send_quote_token(client, account, token, address, amount_wei, settings, mark)
+    if result["status"] != "SENT":
+        raise RuntimeError(f"Refund not sent: {result['status']}; nothing was changed in the books")
+    with ledger.transaction():
+        booked = pool.refund(address, equity, now, amount)
+        ledger.withdraw(amount, now)
+        ledger.put("pool", pool.report(equity - amount))
+        ledger.put("equity_usd", str(equity - amount))
+    print(json.dumps({**plan, "status": "SENT", "tx_hash": result["tx_hash"], "explorer": result["explorer"],
+                      "units_removed": str(booked["units"]), "next": "systemctl start stonkflyrh-worker"}, indent=2))
+
+
 def cmd_donors(a):
     from .ledger import Ledger
     from .pool import Pool
@@ -538,6 +627,8 @@ def cmd_donors(a):
         pool = Pool(ledger, settings.donor_share)
         equity = D(meta.get("equity_usd") or ledger.cash)
         credited = None
+        if getattr(a, "refund", None):
+            return _refund_donor(a, settings, meta, ledger, pool, equity)
         if a.credit:
             if meta["mode"] != "live":
                 raise RuntimeError("Only a live run has on-chain donations to credit")
