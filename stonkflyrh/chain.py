@@ -294,6 +294,114 @@ def checksum(address):
     return to_checksum_address(address)
 
 
+def _throttled(exc):
+    """A response worth trying elsewhere: rate limit, quota, gateway trouble,
+    or no response at all. A revert or a bad request is not."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status in (429, 500, 502, 503, 504):
+        return True
+    names = {c.__name__ for c in type(exc).__mro__}
+    if names & {"ConnectionError", "Timeout", "ReadTimeout", "ConnectTimeout", "ChunkedEncodingError"}:
+        return True
+    text = str(exc).lower()
+    return "429" in text or "too many requests" in text or "rate limit" in text or "quota" in text
+
+
+def _status_of(exc):
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    body = ""
+    try:
+        body = (exc.response.text or "")[:120] if getattr(exc, "response", None) is not None else ""
+    except Exception:
+        body = ""
+    return {"type": type(exc).__name__, "status": status, "body": body}
+
+
+def build_provider(net, rpc=None):
+    """The run's JSON-RPC provider. With a dedicated endpoint configured, the
+    network's public RPC (or STONKFLYRH_LOGS_RPC_URL) stands behind it: a
+    request the dedicated one throttles is answered there instead."""
+    from web3 import HTTPProvider
+
+    primary = rpc or rpc_url(net)
+    fallback = os.environ.get("STONKFLYRH_LOGS_RPC_URL") or net.rpc
+    if fallback == primary:
+        return HTTPProvider(primary, request_kwargs={"timeout": 15})
+    return FailoverProvider(primary, fallback, request_kwargs={"timeout": 15})
+
+
+class FailoverProvider:
+    """Two HTTP providers wearing one face. Every request goes to the primary;
+    one that comes back throttled is retried briefly, then answered by the
+    fallback, and the primary is rested for `cooloff` seconds so a quota that
+    is spent is not hammered. Neither URL is ever printed: a hosted endpoint's
+    URL is its credential."""
+
+    COOLOFF_SECONDS = 60.0
+    RETRIES = 2
+
+    def __init__(self, primary, fallback, request_kwargs=None):
+        from web3 import HTTPProvider
+
+        kw = {"request_kwargs": request_kwargs or {"timeout": 15}}
+        self.primary = HTTPProvider(primary, **kw)
+        self.fallback = HTTPProvider(fallback, **kw)
+        self.endpoint_uri = self.primary.endpoint_uri
+        self.rested_until = 0.0
+        self.switches = 0
+
+    # web3 asks the provider for these; delegate to the primary.
+    def __getattr__(self, name):
+        return getattr(self.primary, name)
+
+    def _sleep(self, seconds):
+        import time as _time
+
+        _time.sleep(seconds)
+
+    def _now(self):
+        import time as _time
+
+        return _time.monotonic()
+
+    def make_request(self, method, params):
+        if self._now() < self.rested_until:
+            try:
+                return self.fallback.make_request(method, params)
+            except Exception as e:
+                if not _throttled(e):
+                    raise
+                # Both are struggling; the primary gets its chance below.
+        last = None
+        for attempt in range(self.RETRIES + 1):
+            try:
+                response = self.primary.make_request(method, params)
+                self.rested_until = 0.0
+                return response
+            except Exception as e:
+                if not _throttled(e):
+                    raise
+                last = e
+                if attempt < self.RETRIES:
+                    self._sleep(0.4 * 2**attempt)
+        self.rested_until = self._now() + self.COOLOFF_SECONDS
+        self.switches += 1
+        print(json.dumps({"rpc": "fallback", "for_seconds": self.COOLOFF_SECONDS, "method": str(method),
+                          "primary_answered": _status_of(last)}), flush=True)
+        return self.fallback.make_request(method, params)
+
+    def make_batch_request(self, requests):
+        try:
+            return self.primary.make_batch_request(requests)
+        except Exception as e:
+            if not _throttled(e):
+                raise
+            return self.fallback.make_batch_request(requests)
+
+    def is_connected(self, show_traceback=False):
+        return self.primary.is_connected(show_traceback) or self.fallback.is_connected(show_traceback)
+
+
 class ChainClient:
     """Read/write access to Robinhood Chain, with the chain id pinned.
 
@@ -305,9 +413,9 @@ class ChainClient:
     def __init__(self, net, w3=None, rpc=None):
         self.net = net
         if w3 is None:
-            from web3 import HTTPProvider, Web3
+            from web3 import Web3
 
-            w3 = Web3(HTTPProvider(rpc or rpc_url(net), request_kwargs={"timeout": 15}))
+            w3 = Web3(build_provider(net, rpc))
         self.w3 = w3
         # Between log windows: the public endpoint rate-limits hard; a
         # dedicated one (STONKFLYRH_RPC_URL) needs only a token pause.

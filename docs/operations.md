@@ -126,6 +126,14 @@ Discovery keeps its place: the block reached is written to the ledger after ever
 6,000-block window and candidates wait in a queue there until screened, so an error
 mid-scan resumes from the last window and never re-screens a pool it already judged.
 
+With a dedicated endpoint configured, the network's public RPC (or
+`STONKFLYRH_LOGS_RPC_URL`) stands behind it for every call. A request the dedicated
+endpoint answers with 429, a 5xx or no response is retried twice, then answered by the
+public RPC, and the dedicated endpoint is rested for a minute before it is tried again.
+A spent QuickNode quota therefore slows the fly rather than stopping it; the journal
+notes each switch as `rpc: fallback` with the status the primary gave, never the URL.
+Check the provider's dashboard when the switches keep coming.
+
 Some hosted endpoints refuse `eth_getLogs` on this chain (QuickNode answers HTTP 413
 to every call). The first refusal moves log fetching to `STONKFLYRH_LOGS_RPC_URL`, or
 the network's public RPC when that is unset, for the rest of the process; quotes,
