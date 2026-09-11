@@ -168,8 +168,24 @@ class Ledger:
         return {k: D(v) for k, v in self.get("positions").items()}
 
     def equity(self, quotes, eth_usd):
-        """Dollars: cash plus holdings at bid, less gas at the current ETH price."""
-        held = sum((v * quotes[p].bid for p, v in self.positions.items()), D(0))
+        """Dollars: cash plus holdings at bid, less gas at the current ETH price.
+
+        A position with no quote this observation (its pool stopped quoting,
+        or it left the universe between fills) is valued at its last mark,
+        and at nothing when there is none: never a crash, never a guess up.
+        """
+        marks = None
+        held = D(0)
+        for p, v in self.positions.items():
+            if v <= 0:
+                continue
+            if p in quotes:
+                held += v * quotes[p].bid
+                continue
+            if marks is None:
+                marks = self.last_marks()
+            mark = marks.get(p)
+            held += v * (mark.bid if mark is not None else D(0))
         gas_wei = int(self.gas_spent * (D(10) ** GAS_DECIMALS))
         return self.cash + held - gas_to_usd(gas_wei, eth_usd)
 
@@ -293,7 +309,8 @@ class Ledger:
             if cash < 0 or positions[p["product"]] < 0:
                 raise RuntimeError("Fill exceeds reserved account funds")
             self.put("cash", str(cash))
-            self.put("positions", {k: str(v) for k, v in positions.items()})
+            # A position sold to nothing leaves the books entirely.
+            self.put("positions", {k: str(v) for k, v in positions.items() if v > 0})
             self.put("gas_spent", str(self.gas_spent + from_wei(gas_wei, GAS_DECIMALS)))
             self.db.execute(
                 "UPDATE orders SET status='SETTLED',settlement=? WHERE id=?",
@@ -303,7 +320,7 @@ class Ledger:
             booked = self.fees.accrue(cid, basis, p["fee_bps"], now)
             if booked["gross_wei"] != fee_wei:
                 raise RuntimeError("Charged fee does not match the booked accrual")
-            if p["side"] == "SELL" and positions[p["product"]] == 0:
+            if p["side"] == "SELL" and positions.get(p["product"], D(0)) == 0:
                 # Position closed; the rug reference for it is no longer live.
                 entries = dict(self.get("entries") or {})
                 entries.pop(p["product"], None)

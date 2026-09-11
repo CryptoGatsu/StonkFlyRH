@@ -410,7 +410,7 @@ def test_round_trip_buy_then_sell(env):
     plan = ledger.reserve(guard.plan("PONS", "SELL", {"PONS": quote()}, ETH_USD), time.time())
     result = PaperBroker(s, ledger).execute(plan, guard.before_submit)
     assert result["status"] == "FILLED"
-    assert ledger.positions["PONS"] < held
+    assert ledger.positions.get("PONS", D(0)) < held
 
 
 def test_gas_is_charged_to_equity_but_not_to_cash(env):
@@ -637,3 +637,18 @@ def test_leaving_a_rug_sells_the_whole_position_not_a_slice(env):
     ledger.block("PONS", "dead pool", time.time())
     exit_plan = guard.plan("PONS", "SELL", {"PONS": quote()}, ETH_USD)
     assert D(exit_plan["amount_in_wei"]) == to_wei(D(positions["PONS"]), 18)
+
+
+def test_a_position_sold_to_nothing_leaves_the_books_and_equity_survives_a_missing_quote(env):
+    settings, ledger, guard = env
+    ledger.put("last_attempt", 0)
+    # A thousand dollars' worth at the fake price, then the pool is declared dead.
+    positions = dict(ledger.get("positions") or {}); positions["PONS"] = str(D("1000") / PRICE); ledger.put("positions", positions)
+    ledger.block("PONS", "dead pool", time.time())
+    plan = ledger.reserve(guard.plan("PONS", "SELL", {"PONS": quote()}, ETH_USD), time.time())
+    ledger.settle(plan["client_order_id"], int(plan["amount_in_wei"]), int(plan["min_out_wei"]), int(plan["planned_fee_wei"]), 0, time.time())
+    assert "PONS" not in ledger.positions                       # gone, not zero
+    # A leftover position with no quote is valued at nothing, not a KeyError.
+    positions = dict(ledger.get("positions") or {}); positions["GHOST"] = "5"; ledger.put("positions", positions)
+    value = ledger.equity({}, ETH_USD)                          # no quotes at all: no raise
+    assert value == ledger.cash                                 # nothing added for GHOST, no gas spent

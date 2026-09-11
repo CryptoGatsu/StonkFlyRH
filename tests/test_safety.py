@@ -524,7 +524,7 @@ def test_closing_a_position_clears_its_rug_reference(tmp_path):
         ledger.put("last_attempt", 0)
         plan = ledger.reserve(guard.plan("PONS", "SELL", quotes, ETH_USD), time.time())
         PaperBroker(settings, ledger).execute(plan, guard.before_submit)
-        assert ledger.positions["PONS"] == 0
+        assert "PONS" not in ledger.positions           # sold to nothing: off the books
         assert watch.entry_price("PONS") is None
     finally:
         ledger.close()
