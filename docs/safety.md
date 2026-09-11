@@ -21,6 +21,8 @@ reputation service, no allowlist, no score from anywhere else.
 | `pool_history` | v3: `slot0().observationCardinality` | fewer than 4 oracle observations — the pool is brand new |
 | `pool_age` | v4: seconds since the block the pool was initialised in | younger than 30 minutes |
 | `executable` | v4, live runs only: the real buy at the run's order size, dry-run through the Universal Router from the fly wallet | it reverts — a quote never moves tokens, so a token whose transfer refuses the router (honeypot, blacklist, trading not open) passes every quote and fails here. A missing approval is not held against the token. This check vetoes the buy and shows on the site but never evicts a token from the universe: the run's own swap path can be what is failing |
+| `activity` | the pool's own `Swap` events in the last `activity_window_seconds` (1 h) | fewer than `min_recent_swaps` (5): nobody is trading it |
+| `market_cap` | price × total supply, from the run's own quote | under `min_market_cap_usd` ($10,000): a graveyard, however deep the pool |
 | `pool_empty` | v4: liquidity is zero | the pool exists but has no liquidity yet (a Pons token before graduation): not a rejection — the candidate is screened again every 30 minutes for a day |
 | `sellable` | quoter, token → USDG | the sell leg returns nothing: a honeypot |
 | `transfer_tax` | round trip of a tiny probe, minus twice the pool fee, halved | above the ceiling (default 5% per side) |
@@ -86,3 +88,10 @@ it. That is upstream's rule and it is kept deliberately: a halted run does not
 liquidate, and a financial stop cannot be cleared by a flag. If a rug takes you
 through the stop, the position is yours to unwind by hand, with the ledger and
 explorer in front of you.
+
+## Leaving a dead pool
+
+A held coin whose pool has seen no swap for `dead_after_seconds` (4 h) is sold on its
+next observation whatever the brain says, and blocklisted: the exit is allowed the
+rug-exit spread, and the coin is not bought again. The event is recorded as
+`dead_pool` and the decision shows as a forced SELL on the site.

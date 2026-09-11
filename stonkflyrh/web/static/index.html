@@ -385,7 +385,7 @@ function tokenLinks(address, opts = {}) {
   if (!address) return "";
   const a = esc(address);
   const items = [
-    `<a href="https://dexscreener.com/search?q=${a}" target="_blank" rel="noopener" title="DexScreener">dex</a>`,
+    `<a href="https://dexscreener.com/robinhood/${a}" target="_blank" rel="noopener" title="DexScreener">dex</a>`,
     `<a href="https://ponsfamily.com/token/${a}" target="_blank" rel="noopener" title="Pons">pons</a>`,
   ];
   if (explorer) items.push(`<a href="${esc(explorer)}/token/${a}" target="_blank" rel="noopener" title="Explorer">scan</a>`);
@@ -404,6 +404,13 @@ function marketCap(sym, mid) {
   const e = (meta.universe && meta.universe[sym]) || (meta.dropped && meta.dropped[sym]);
   if (!e || !e.total_supply || !Number.isFinite(mid)) return NaN;
   return mid * Number(e.total_supply) / 10 ** Number(e.decimals ?? 18);
+}
+function swapsLabel(sym) {
+  const a = meta.activity && meta.activity[sym];
+  if (!a || !Number.isFinite(Number(a.swaps))) return "";
+  const mins = Math.round(Number(a.window_seconds || 3600) / 60);
+  const quiet = a.last_swap_age_seconds == null ? "no swaps" : `${a.swaps} swap${a.swaps === 1 ? "" : "s"}/${mins}m`;
+  return ` · ${quiet}`;
 }
 function capOrPrice(sym, mid) {
   const mc = marketCap(sym, mid);
@@ -471,14 +478,14 @@ function renderBag() {
       // Not held: one compact row in the watchlist, not a card.
       watch.push(`<div class="w-row${blocked ? " rug" : watching ? " watch" : ""}" title="${esc(sym)}">
         <div class="tile" style="background:${tileColor(sym)}">${esc(sym[0])}</div>
-        <div style="min-width:0"><div class="sym">${esc(sym)}</div><div class="px" title="${Number.isFinite(mid) ? usd(mid, 8) + " per coin" : ""}">${capOrPrice(sym, mid)}${tokenLinks((meta.universe && meta.universe[sym] && meta.universe[sym].address) || "")}</div></div>
+        <div style="min-width:0"><div class="sym">${esc(sym)}</div><div class="px" title="${Number.isFinite(mid) ? usd(mid, 8) + " per coin" : ""}">${capOrPrice(sym, mid)}${esc(swapsLabel(sym))}${tokenLinks((meta.universe && meta.universe[sym] && meta.universe[sym].address) || "")}</div></div>
         ${blocked ? `<span class="eye rug">RUGGED</span>` : watching ? `<span class="eye">WATCHING</span>` : ""}</div>`);
       continue;
     }
     const addr = (meta.universe && meta.universe[sym] && meta.universe[sym].address) || "";
     cards.push(`<div class="card${watching ? " watch" : ""}">
       <div class="top"><div class="tile" style="background:${tileColor(sym)}">${esc(sym[0])}</div>
-        <div><div class="sym">${esc(sym)}${tokenLinks(addr)}</div><div class="price">${capOrPrice(sym, mid)}</div></div>
+        <div><div class="sym">${esc(sym)}${tokenLinks(addr)}</div><div class="price">${capOrPrice(sym, mid)}${esc(swapsLabel(sym))}</div></div>
         ${blocked ? `<span class="watching" style="color:var(--pink)">RUGGED</span>` : watching ? `<span class="watching">WATCHING</span>` : ""}</div>
       <div class="mid"><span class="v">${held > 0 ? usd(value) : "—"}</span><span class="d ${delta >= 0 ? "up" : "down"}">${Number.isFinite(delta) ? signed(delta) + (Number.isFinite(entry) && entry > 0 ? ` (${((mid / entry - 1) * 100).toFixed(1)}%)` : "") : ""}</span></div>
       <div class="bot"><span>${held > 0 ? qty(held) + " " + esc(sym) : "not held"}</span><span>${held > 0 && Number.isFinite(eq) ? (value / eq * 100).toFixed(1) + "%" : ""}</span></div>
@@ -659,7 +666,7 @@ function renderCoin() {
   const links = [];
   if (explorer) links.push(`<a href="${esc(explorer)}/token/${esc(coin.address)}" target="_blank" rel="noopener">explorer</a>`);
   links.push(`<a href="https://ponsfamily.com/token/${esc(coin.address)}" target="_blank" rel="noopener">pons</a>`);
-  links.push(`<a href="https://dexscreener.com/search?q=${esc(coin.address)}" target="_blank" rel="noopener">dexscreener</a>`);
+  links.push(`<a href="https://dexscreener.com/robinhood/${esc(coin.address)}" target="_blank" rel="noopener">dexscreener</a>`);
   links.push(`<a href="https://x.com/StonkFlyRH" target="_blank" rel="noopener">@StonkFlyRH on X</a>`);
   $("coin-links").innerHTML = "The operator's launch on Pons, paired with GOOGL. Screened like any other token; the fly decides whether to hold it. · " + links.join(" · ");
 }

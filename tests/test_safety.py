@@ -528,3 +528,31 @@ def test_closing_a_position_clears_its_rug_reference(tmp_path):
         assert watch.entry_price("PONS") is None
     finally:
         ledger.close()
+
+
+def test_the_screen_asks_whether_anyone_is_here(tmp_path):
+    """Activity and market-cap checks: a token with a $2.8K cap and one swap an
+    hour is withheld even when its pool clears the depth floor."""
+    from stonkflyrh.safety import RugScreen
+
+    settings = Settings(min_market_cap_usd="10000", min_recent_swaps=5)
+    ledger = Ledger(tmp_path / "l.sqlite", settings, "paper", CAPITAL)
+    chain = FakePool()
+    try:
+        screen = RugScreen(settings, chain, FakeRegistry(), ledger, chain.quote)
+
+        class Quiet:
+            def enough(self, product, entry, now):
+                return False, "1 swap in the last 60 min, floor 5", 1
+
+        screen.activity = Quiet()
+        # 1e9 tokens, priced by the fake pool at 0.00025 USDG each: a $250K cap.
+        entry = {"address": TOKEN, "decimals": 18, "pool_fee": 10000, "total_supply": str(10**9 * 10**18)}
+        checks = {c.name: c for c in screen._market("PONS", entry)}
+        assert not checks["activity"].passed
+        assert checks["market_cap"].passed and "$247,000" in checks["market_cap"].detail   # net of the fake pool fee
+        # A supply a thousand times smaller is a $250 cap: a graveyard.
+        small = {**entry, "total_supply": str(10**6 * 10**18)}
+        assert not {c.name: c for c in screen._market("PONS", small)}["market_cap"].passed
+    finally:
+        ledger.close()

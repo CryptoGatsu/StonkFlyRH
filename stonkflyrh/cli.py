@@ -180,6 +180,10 @@ def settings_from(args, net_key):
         neural_ms=args.neural_ms,
         pulse_ms=min(200, args.neural_ms / 2),
         decoder_threshold_hz=float(os.environ.get("STONKFLYRH_DECODER_HZ", "2")),
+        min_recent_swaps=int(os.environ.get("STONKFLYRH_MIN_SWAPS", "5")),
+        activity_window_seconds=float(os.environ.get("STONKFLYRH_ACTIVITY_WINDOW_SECONDS", "3600")),
+        dead_after_seconds=float(os.environ.get("STONKFLYRH_DEAD_AFTER_SECONDS", "14400")),
+        min_market_cap_usd=os.environ.get("STONKFLYRH_MIN_MARKET_CAP_USD", "10000"),
     )
 
 
@@ -1089,6 +1093,12 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
     )
     if screen is not None and a.live:
         screen.wallet = broker.address
+    activity = None
+    if screen is not None and settings.activity_enabled and not a.fixture:
+        from .activity import ActivityMonitor
+
+        activity = ActivityMonitor(settings, client, registry, ledger)
+        screen.activity = activity
     watch = RugWatch(settings, ledger, screen)
     if a.fixture:
         discovery = FixtureDiscovery(settings, ledger, market) if settings.discovery_enabled else None
@@ -1213,7 +1223,7 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
         watchdog.begin()
         try:
             _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, provider,
-                  action, controller, screen, watch, discovery, donations, airdrop)
+                  action, controller, screen, watch, discovery, donations, airdrop, activity)
             failures = 0
         except Exception as e:
             # A trade in flight is never covered by this: the broker raises its
@@ -1290,7 +1300,7 @@ class _SlowTickWatchdog:
 
 
 def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, provider,
-          action, controller, screen, watch, discovery, donations, airdrop=None):
+          action, controller, screen, watch, discovery, donations, airdrop=None, activity=None):
     """One observation: look, decide, maybe trade, record."""
     from PIL import Image
 
@@ -1383,11 +1393,28 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
 
         order = {"status": "HOLD"}
         screen_json = None
-        if neural["side"] != "HOLD":
+        side = neural["side"]
+        forced = None
+        if activity is not None:
+            # A held coin whose pool has gone quiet is left, whatever the brain
+            # says: nobody will take the other side later. Blocklisting it
+            # widens the exit spread the way a rug does and stops a re-buy.
+            try:
+                forced = activity.exit_reason(
+                    product, ledger.universe().get(product, {}), ledger.positions.get(product, D(0)), time.time()
+                )
+            except Exception:
+                forced = None
+            if forced:
+                side = "SELL"
+                if not ledger.is_blocked(product):
+                    ledger.block(product, "dead pool: " + forced, time.time())
+                    ledger.record_event("dead_pool", {"at": time.time(), "product": product, "reason": forced})
+        if side != "HOLD":
             try:
                 fresh = market.snapshot(limits["order_limit"])
                 latest = fresh[product]
-                tolerance = guard.move_tolerance(product, neural["side"])
+                tolerance = guard.move_tolerance(product, side)
                 if abs(latest.bid - q.bid) / q.bid > tolerance:
                     raise Veto("Price moved beyond neural observation tolerance")
                 provider.quotes = fresh
@@ -1399,11 +1426,14 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
                     if client is not None
                     else int(D(settings.paper_gas_price_gwei) * D(10**9))
                 )
-                order = action.invoke({"product": product, "side": neural["side"]})
-                if neural["side"] == "BUY" and order.get("status") in ("FILLED", "SETTLED"):
+                order = action.invoke({"product": product, "side": side})
+                if side == "BUY" and order.get("status") in ("FILLED", "SETTLED"):
                     watch.record_entry(product, latest.ask)
             except Veto as e:
                 order = {"status": "VETO", "reason": str(e)}
+        if forced:
+            order = {**order, "forced": forced}
+            neural = {**neural, "side": "SELL", "forced": forced}
         if screen is not None:
             screen_json = ledger.screen_raw(product)
 

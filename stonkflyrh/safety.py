@@ -250,10 +250,41 @@ class RugScreen:
             self._ownership(address),
         ]
         checks += self._pool(product, entry, pool, eth_usd)
+        checks += self._market(product, entry)
         if all(c.passed for c in checks):
             executable = self._executable(product, entry)
             if executable is not None:
                 checks.append(executable)
+        return checks
+
+    # Set by the run when activity tracking is on; None means no such checks.
+    activity = None
+
+    def _market(self, product, entry):
+        """Is anyone here? Recent swaps in the pool, and a market cap above the
+        graveyard line (price × total supply, from the run's own quote)."""
+        checks = []
+        if self.activity is not None and self.s.activity_enabled:
+            try:
+                judged = self.activity.enough(product, entry, None)
+            except Exception as e:
+                judged = None
+                checks.append(Check("activity", True, f"could not read swaps: {type(e).__name__}", None))
+            if judged is not None:
+                passed, detail, swaps = judged
+                checks.append(Check("activity", passed, detail, swaps))
+        floor = D(self.s.min_market_cap_usd)
+        supply = entry.get("total_supply")
+        if floor > 0 and supply:
+            try:
+                qd = self.registry.quote_decimals
+                unit = 10 ** int(entry["decimals"])
+                out = self._quote_call(product)(entry["address"], self.registry.quote_address, unit, int(entry.get("pool_fee") or self.s.pool_fee_tier))
+                price = from_wei(int(out), qd)
+                cap = price * D(int(supply)) / D(unit)
+                checks.append(Check("market_cap", cap >= floor, f"about ${cap:,.0f}, floor ${floor:,.0f}", str(cap)))
+            except Exception as e:
+                checks.append(Check("market_cap", True, f"could not price the supply: {type(e).__name__}", None))
         return checks
 
     # The wallet a live run trades from. Set by the run; None in paper mode.

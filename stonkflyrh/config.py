@@ -121,6 +121,16 @@ class Settings:
     max_pool_usd: str = "1000"
     loss_stop_fraction: str = "0.25"
 
+    # -- activity -----------------------------------------------------------
+    # A clean contract in a pool nobody trades is not a trade. Buys need this
+    # many swaps in the window; a held coin whose pool goes quiet this long is
+    # sold. A market cap under the floor is a graveyard, however deep the pool.
+    activity_enabled: bool = True
+    min_recent_swaps: int = 5
+    activity_window_seconds: float = 3600
+    dead_after_seconds: float = 14400
+    min_market_cap_usd: str = "10000"
+
     # -- airdrop ------------------------------------------------------------
     # The operator's coin, sent from the deployer wallet to wallets that bought
     # tokens the screen approved and still hold one. Amounts are whole coins.
@@ -210,6 +220,7 @@ class Settings:
         self._check_discovery()
         self._check_donations()
         self._check_airdrop()
+        self._check_activity()
         self._check_adaptation()
         self._check_neural()
 
@@ -226,6 +237,18 @@ class Settings:
             raise ValueError("Pool cap must hold the operator's stake and stay under $100,000")
         if not D(0) < D(self.loss_stop_fraction) < 1:
             raise ValueError("Loss stop fraction must be between 0 and 1")
+
+    def _check_activity(self):
+        if type(self.activity_enabled) is not bool:
+            raise ValueError("activity_enabled is a flag")
+        if type(self.min_recent_swaps) is not int or not 0 <= self.min_recent_swaps <= 1000:
+            raise ValueError("min_recent_swaps must be 0-1000")
+        if not math.isfinite(self.activity_window_seconds) or not 300 <= self.activity_window_seconds <= 86400:
+            raise ValueError("Activity window must be 5 minutes to a day")
+        if not math.isfinite(self.dead_after_seconds) or not 600 <= self.dead_after_seconds <= 7 * 86400:
+            raise ValueError("dead_after_seconds must be 10 minutes to a week")
+        if D(self.min_market_cap_usd) < 0:
+            raise ValueError("Market cap floor cannot be negative")
 
     def _check_airdrop(self):
         if type(self.airdrop_enabled) is not bool:
