@@ -11,7 +11,7 @@ import time
 import traceback
 from pathlib import Path
 
-from .chain import NETWORKS, network
+from .chain import NETWORKS, checksum, network
 from .config import D, Settings, to_wei
 from .wallet import FLY_WALLET, coin_address
 
@@ -75,6 +75,10 @@ def build_parser():
     )
     donors.add_argument("--amount", help="Refund this many USDG instead of the stake's current value")
     donors.add_argument("--send", action="store_true", help="With --refund: actually transfer")
+    donors.add_argument("--book", action="store_true",
+                        help="With --refund: the USDG already left (see the refunds events); verify that "
+                             "transfer on chain and close the books without sending again")
+    donors.add_argument("--tx", help="With --book: the transfer's hash, if not the last one recorded")
     donors.add_argument("--network", choices=sorted(NETWORKS), default=None)
     donors.add_argument("--tokens", type=Path)
 
@@ -554,8 +558,6 @@ def _refund_donor(a, settings, meta, ledger, pool, equity):
     """Send a donor their money back and take them out of the books: the USDG
     leaves the fly wallet, the donor's units leave the pool, and the ledger's
     cash falls by the same amount so the next balance check agrees."""
-    from .chain import checksum
-
     if meta["mode"] != "live":
         raise RuntimeError("Only a live run holds donor money")
     if _worker_running(a.out):
@@ -583,7 +585,7 @@ def _refund_donor(a, settings, meta, ledger, pool, equity):
         "operator_absorbs": str((amount - value).quantize(D("0.01"))),
         "nav": str(nav.quantize(D("0.000001"))),
     }
-    if not a.send:
+    if not a.send and not a.book:
         print(json.dumps({**plan, "dry_run": True, "note": "add --send to transfer"}, indent=2))
         return
     from .payouts import send_quote_token
@@ -591,30 +593,77 @@ def _refund_donor(a, settings, meta, ledger, pool, equity):
     from .wallet import load
 
     _, client, registry, _ = chain_context(a.network, a.tokens, [])
-    account = load("trading")
-    fly = wallet_address("trading") or FLY_WALLET
+    fly = checksum(wallet_address("trading") or FLY_WALLET)
     token = client.erc20(registry.quote_address)
-    amount_wei = to_wei(amount, registry.quote_decimals)
-    balance = int(token.functions.balanceOf(checksum(fly)).call())
-    if balance < amount_wei:
-        raise RuntimeError("The fly wallet holds less USDG than the refund")
     now = time.time()
-    record = {**plan, "at": now, "status": "PLANNED", "tx_hash": None}
+    history = ledger.events("refunds", limit=200)
+    if a.book:
+        # The transfer is on chain already; find it, prove it, then close the books.
+        tx_hash = a.tx
+        if not tx_hash:
+            sent = [e for e in history if e.get("refund") == address and e.get("tx_hash")]
+            if not sent:
+                raise RuntimeError("No recorded refund transfer for that address; pass --tx")
+            tx_hash = sent[0]["tx_hash"]
+        if any(e.get("tx_hash") == tx_hash and e.get("status") == "BOOKED" for e in history):
+            raise RuntimeError(f"Transfer {tx_hash} is already booked")
+        receipt = client.w3.eth.get_transaction_receipt(tx_hash)
+        moved = _refund_amount_in(receipt, checksum(registry.quote_address), fly, address, registry.quote_decimals)
+        if moved is None:
+            raise RuntimeError(f"Transfer {tx_hash} did not move USDG from the fly wallet to {address}")
+        amount = moved
+        record = {**plan, "amount": str(amount), "at": now, "status": "SENT", "tx_hash": tx_hash}
+        explorer = client.net.tx_url(tx_hash)
+    else:
+        account = load("trading")
+        amount_wei = to_wei(amount, registry.quote_decimals)
+        balance = int(token.functions.balanceOf(fly).call())
+        if balance < amount_wei:
+            raise RuntimeError("The fly wallet holds less USDG than the refund")
+        record = {**plan, "at": now, "status": "PLANNED", "tx_hash": None}
 
-    def mark(status, tx_hash=None):
-        record.update({"status": status, "tx_hash": tx_hash or record["tx_hash"]})
-        ledger.record_event("refunds", dict(record))
+        def mark(status, tx_hash=None):
+            record.update({"status": status, "tx_hash": tx_hash or record["tx_hash"]})
+            ledger.record_event("refunds", dict(record))
 
-    result = send_quote_token(client, account, token, address, amount_wei, settings, mark)
-    if result["status"] != "SENT":
-        raise RuntimeError(f"Refund not sent: {result['status']}; nothing was changed in the books")
+        result = send_quote_token(client, account, token, address, amount_wei, settings, mark)
+        if result["status"] != "SENT":
+            raise RuntimeError(f"Refund not sent: {result['status']}; nothing was changed in the books")
+        tx_hash, explorer = result["tx_hash"], result["explorer"]
     with ledger.transaction():
         booked = pool.refund(address, equity, now, amount)
         ledger.withdraw(amount, now)
         ledger.put("pool", pool.report(equity - amount))
         ledger.put("equity_usd", str(equity - amount))
-    print(json.dumps({**plan, "status": "SENT", "tx_hash": result["tx_hash"], "explorer": result["explorer"],
-                      "units_removed": str(booked["units"]), "next": "systemctl start stonkflyrh-worker"}, indent=2))
+        ledger.record_event("refunds", {**record, "status": "BOOKED", "tx_hash": tx_hash, "at": now})
+    print(json.dumps({**plan, "amount": str(amount), "status": "BOOKED", "tx_hash": tx_hash, "explorer": explorer,
+                      "units_removed": str(booked["units"]), "next": "resume if halted, then start the worker"},
+                     indent=2))
+
+
+def _refund_amount_in(receipt, quote, sender, recipient, decimals):
+    """The USDG a mined transfer moved from `sender` to `recipient`, read from
+    the token's own Transfer log; None when the receipt shows no such move."""
+    from .activity import swap_topic
+    from .chain import hex32
+
+    if receipt is None or int(receipt.get("status", 1)) != 1:
+        return None
+    topic = swap_topic("Transfer(address,address,uint256)").lower()
+    total = 0
+    for log in receipt.get("logs", []):
+        topics = log.get("topics") or []
+        if checksum(log["address"]) != quote or len(topics) != 3:
+            continue
+        if hex32(topics[0]).lower() != topic:
+            continue
+        frm = checksum("0x" + hex32(topics[1])[-40:])
+        to = checksum("0x" + hex32(topics[2])[-40:])
+        if frm != checksum(sender) or to != checksum(recipient):
+            continue
+        data = log.get("data")
+        total += int(data, 16) if isinstance(data, str) else int.from_bytes(bytes(data), "big")
+    return D(total) / D(10**decimals) if total > 0 else None
 
 
 def cmd_donors(a):

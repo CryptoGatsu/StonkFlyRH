@@ -137,6 +137,11 @@ class Ledger:
 
     @contextlib.contextmanager
     def transaction(self):
+        """One write transaction. Nested use joins the outer one, so a helper
+        that guards its own writes can be called from inside a larger unit."""
+        if self.db.in_transaction:
+            yield
+            return
         self.db.execute("BEGIN IMMEDIATE")
         try:
             yield

@@ -99,3 +99,8 @@ ledger's cash falls by the same amount, so the worker's balance check agrees whe
 restarts. Never send from the fly wallet by hand: the worker halts on a balance it did
 not move. Without `--amount` the refund is the stake's current value; with it, a
 round-number refund of what they sent, any shortfall coming out of the operator's stake.
+
+If the transfer went out but the command failed before the books closed, nothing is
+lost: the hash is in the ledger's `refunds` events. Run the same command with `--book`
+instead of `--send`; it reads the transfer from the chain, checks it moved USDG from
+the fly wallet to that donor, and closes the books for exactly what moved.

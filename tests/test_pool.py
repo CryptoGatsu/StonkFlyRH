@@ -262,3 +262,34 @@ def test_a_refund_removes_the_donor_and_the_operator_absorbs_any_difference(pool
         p.refund(OPERATOR, after, 4)
     with pytest.raises(ValueError, match="exceeds the operator's stake"):
         p.refund(BOB, after, 5, amount=D("1000"))
+
+
+def test_a_nested_transaction_joins_the_outer_one(pool):
+    p, ledger = pool
+    with ledger.transaction():
+        ledger.put("a", 1)
+        with ledger.transaction():  # pool helpers guard their own writes; callers may wrap them
+            ledger.put("b", 2)
+    assert ledger.get("a") == 1 and ledger.get("b") == 2
+    try:
+        with ledger.transaction():
+            ledger.put("a", 3)
+            raise KeyError("boom")
+    except KeyError:
+        pass
+    assert ledger.get("a") == 1  # the outer rollback still covers everything
+
+
+def test_the_refund_transfer_is_read_from_the_tokens_own_log():
+    from stonkflyrh.activity import swap_topic
+    from stonkflyrh.cli import _refund_amount_in
+
+    quote, fly, donor = "0x" + "11" * 20, "0x" + "22" * 20, "0x" + "33" * 20
+    topic = swap_topic("Transfer(address,address,uint256)")
+    pad = lambda a: "0x" + "00" * 12 + a[2:]
+    good = {"address": quote, "topics": [topic, pad(fly), pad(donor)], "data": hex(300 * 10**6)}
+    other = {"address": quote, "topics": [topic, pad(donor), pad(fly)], "data": hex(5 * 10**6)}
+    receipt = {"status": 1, "logs": [other, good]}
+    assert _refund_amount_in(receipt, quote, fly, donor, 6) == D("300")
+    assert _refund_amount_in({"status": 0, "logs": [good]}, quote, fly, donor, 6) is None
+    assert _refund_amount_in({"status": 1, "logs": [other]}, quote, fly, donor, 6) is None
