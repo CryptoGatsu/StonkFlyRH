@@ -386,7 +386,7 @@ function tokenLinks(address, opts = {}) {
   const a = esc(address);
   const items = [
     `<a href="https://dexscreener.com/robinhood/${a}" target="_blank" rel="noopener" title="DexScreener">dex</a>`,
-    `<a href="https://ponsfamily.com/token/${a}" target="_blank" rel="noopener" title="Pons">pons</a>`,
+    `<a href="https://www.ponsfamily.com/launchpad/${a}" target="_blank" rel="noopener" title="Pons">pons</a>`,
   ];
   if (explorer) items.push(`<a href="${esc(explorer)}/token/${a}" target="_blank" rel="noopener" title="Explorer">scan</a>`);
   return `<span class="tlinks${opts.cls ? " " + opts.cls : ""}">${items.join("")}</span>`;
@@ -665,7 +665,7 @@ function renderCoin() {
   $("coin-state").textContent = held ? "held by the fly" : inUniverse ? "in the fly's universe" : "waiting for its pool";
   const links = [];
   if (explorer) links.push(`<a href="${esc(explorer)}/token/${esc(coin.address)}" target="_blank" rel="noopener">explorer</a>`);
-  links.push(`<a href="https://ponsfamily.com/token/${esc(coin.address)}" target="_blank" rel="noopener">pons</a>`);
+  links.push(`<a href="https://www.ponsfamily.com/launchpad/${esc(coin.address)}" target="_blank" rel="noopener">pons</a>`);
   links.push(`<a href="https://dexscreener.com/robinhood/${esc(coin.address)}" target="_blank" rel="noopener">dexscreener</a>`);
   links.push(`<a href="https://x.com/StonkFlyRH" target="_blank" rel="noopener">@StonkFlyRH on X</a>`);
   $("coin-links").innerHTML = "The operator's launch on Pons, paired with GOOGL. Screened like any other token; the fly decides whether to hold it. · " + links.join(" · ");
