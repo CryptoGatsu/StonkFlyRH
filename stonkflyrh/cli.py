@@ -1662,6 +1662,10 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
                 for missing in set(quotes) - set(fresh):
                     fresh[missing] = dataclasses.replace(quotes[missing], timestamp=time.time())
                 latest = fresh[product]
+                if q.written_off or q.bid <= 0 or latest.written_off or latest.bid <= 0:
+                    # A pool that will not quote has no price to move from and
+                    # nothing to swap against; the coin is already written off.
+                    raise Veto(f"{product}'s pool will not quote; nothing to trade against")
                 tolerance = guard.move_tolerance(product, side)
                 if abs(latest.bid - q.bid) / q.bid > tolerance:
                     raise Veto("Price moved beyond neural observation tolerance")
