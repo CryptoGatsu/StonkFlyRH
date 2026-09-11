@@ -1487,7 +1487,7 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
                 # either: carry the tick's written-off quotes over so the
                 # snapshot stays complete and the guard can judge this order.
                 for missing in set(quotes) - set(fresh):
-                    fresh[missing] = quotes[missing]
+                    fresh[missing] = dataclasses.replace(quotes[missing], timestamp=time.time())
                 latest = fresh[product]
                 tolerance = guard.move_tolerance(product, side)
                 if abs(latest.bid - q.bid) / q.bid > tolerance:

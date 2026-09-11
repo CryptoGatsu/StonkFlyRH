@@ -144,7 +144,8 @@
   .tab:hover:not([aria-selected="true"]) { color: var(--ink); }
   .tab:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
   .tabs .obs { margin-left: auto; color: var(--muted); font-size: 11px; letter-spacing: .06em; }
-  .scroll { overflow-x: auto; }
+  .scroll { overflow-x: auto; max-height: 440px; overflow-y: auto; }
+  .scroll thead th { position: sticky; top: 0; background: var(--panel, #0f0f14); z-index: 1; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 560px; font-variant-numeric: tabular-nums; }
   th { text-align: left; font: 700 9px/1 var(--pixel); letter-spacing: .12em; color: var(--muted); padding: 10px 8px 12px 0; border-bottom: 1px solid var(--line); }
   th.r, td.r { text-align: right; padding-right: 0; }
@@ -742,7 +743,7 @@ function tradeRow(row, fresh) {
     <td><span class="side ${esc(side)}">${esc(side)} ${esc(row.product)}</span><span class="k">${qty(units)} @ ${usd(mark, 8)}${Number.isFinite(marketCap(row.product, Number(mark))) ? " · MC " + compact(marketCap(row.product, Number(mark))) : ""}${link}${tokenLinks((meta.universe && meta.universe[row.product] && meta.universe[row.product].address) || (meta.dropped && meta.dropped[row.product] && meta.dropped[row.product].address) || "")}</span></td>
     <td class="r">${usd(value)}</td><td class="r">${fee ? usd(fee) : "—"}</td>
     <td class="r pnl ${side === "SELL" && Number(row.pnl_delta_usd) < 0 ? "SELL" : "BUY"}">${realized}</td>`;
-  const body = $("trades"); body.prepend(tr); while (body.children.length > 100) body.lastElementChild.remove();
+  const body = $("trades"); body.prepend(tr); while (body.children.length > 40) body.lastElementChild.remove();
   refreshTradePnl();
   $("trades-empty").hidden = true;
   $("n-trades").textContent = body.children.length;
@@ -757,7 +758,7 @@ function decisionRow(row, fresh) {
     <td><span class="side ${esc(side)}">${esc(side)}</span>${row.rug ? `<span class="k" style="color:var(--pink)">rug detected</span>` : n.stimulus ? `<span class="k">${esc(n.stimulus)} input</span>` : ""}${row.donations ? `<span class="k" style="color:var(--lime)">${row.donations.length} donation${row.donations.length === 1 ? "" : "s"} received</span>` : ""}${row.donor_payouts ? `<span class="k" style="color:var(--cyan)">${row.donor_payouts.length} donor payout${row.donor_payouts.length === 1 ? "" : "s"}</span>` : ""}</td>
     <td>${esc(row.product)}</td><td class="r">${price(q.bid)}<span class="k">${price(q.ask)}</span></td><td class="r">${sc}</td>
     <td class="r"><span class="pill ${cls}" title="${esc(ex.reason || "")}">${esc(status)}</span>${ex.reason ? `<span class="k" style="max-width:220px;white-space:normal">${esc(ex.reason)}</span>` : ""}</td>`;
-  const body = $("decisions"); body.prepend(tr); while (body.children.length > 150) body.lastElementChild.remove();
+  const body = $("decisions"); body.prepend(tr); while (body.children.length > 40) body.lastElementChild.remove();
   $("decisions-empty").hidden = true;
 }
 function renderOrder(row) {
