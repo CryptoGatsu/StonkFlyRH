@@ -73,10 +73,12 @@ def test_single_hop_payload_has_the_three_actions_in_order():
     assert commands == bytes([v4.V4_SWAP])
     actions, params = decode(["bytes", "bytes[]"], inputs[0])
     assert list(actions) == [v4.SWAP_EXACT_IN_SINGLE, v4.SETTLE_ALL, v4.TAKE_ALL]
-    swap = decode(["(" + v4.POOL_KEY + ",bool,uint128,uint128,bytes)"], params[0])[0]
+    # Universal Router 2.1.1 layout: minHopPriceX36 sits before hookData.
+    swap = decode([v4.EXACT_IN_SINGLE_PARAMS], params[0])[0]
     # eth_abi decodes addresses lowercase.
     assert tuple(x.lower() if isinstance(x, str) else x for x in swap[0]) == (A.lower(), B.lower(), 30000, 60, HOOK.lower())
     assert swap[1] is True and swap[2] == 10_000_000 and swap[3] == 12345
+    assert swap[4] == 0 and swap[5] == b""
     settle = decode(["address", "uint256"], params[1])
     take = decode(["address", "uint256"], params[2])
     assert (settle[0].lower(), settle[1]) == (A.lower(), 10_000_000)   # input currency, max
@@ -110,8 +112,10 @@ def test_multi_hop_payload_settles_input_and_takes_final_output():
     assert commands == bytes([v4.V4_SWAP]) and out == C
     actions, params = decode(["bytes", "bytes[]"], inputs[0])
     assert list(actions) == [v4.SWAP_EXACT_IN, v4.SETTLE_ALL, v4.TAKE_ALL]
-    swap = decode(["(address," + v4.PATH_KEY + "[],uint128,uint128)"], params[0])[0]
-    assert swap[0].lower() == A.lower() and len(swap[1]) == 2 and swap[2] == 10_000_000 and swap[3] == 999
+    # Universal Router 2.1.1 layout: one minHopPriceX36 per hop, then amounts.
+    swap = decode([v4.EXACT_IN_PARAMS], params[0])[0]
+    assert swap[0].lower() == A.lower() and len(swap[1]) == 2
+    assert list(swap[2]) == [0, 0] and swap[3] == 10_000_000 and swap[4] == 999
     assert decode(["address", "uint256"], params[2])[0].lower() == C.lower()
 
 
@@ -149,3 +153,12 @@ def test_a_revert_is_described_by_name_or_message():
     e = ContractLogicError("execution reverted", data="0xdeadbeef")
     assert "unknown error 0xdeadbeef" in describe_revert(e)
     assert describe_revert(ContractLogicError("execution reverted: no data")).startswith("reverted: execution reverted")
+
+
+def test_the_router_structs_match_universal_router_2_1_1():
+    """The struct strings Uniswap's own SDK uses for UR 2.1.1, field for field
+    (the SDK writes PathKey.fee as uint256; uint24 encodes identically)."""
+    sdk_single = "((address,address,uint24,int24,address),bool,uint128,uint128,uint256,bytes)"
+    sdk_path = "(address,(address,uint24,int24,address,bytes)[],uint256[],uint128,uint128)"
+    assert v4.EXACT_IN_SINGLE_PARAMS == sdk_single
+    assert v4.EXACT_IN_PARAMS == sdk_path

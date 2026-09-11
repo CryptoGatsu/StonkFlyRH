@@ -245,6 +245,15 @@ def _signed24(word):
     return value - 2**256 if value >= 2**255 else value
 
 
+# Universal Router 2.1.1 (the version deployed on Robinhood Chain) added a
+# per-hop minimum price, minHopPriceX36, to every swap struct. The 2.0 layout
+# decodes against the wrong shape and reverts with no data. Zero disables it;
+# the slippage bound is amountOutMinimum.
+EXACT_IN_SINGLE_PARAMS = "(" + POOL_KEY + ",bool,uint128,uint128,uint256,bytes)"
+EXACT_IN_PARAMS = "(address," + PATH_KEY + "[],uint256[],uint128,uint128)"
+NO_HOP_PRICE_LIMIT = 0
+
+
 def encode_exact_in_single(key, zero_for_one, amount_in, min_out, hook_data=b""):
     """The Universal Router `execute` arguments for one v4 exact-input swap.
 
@@ -259,8 +268,8 @@ def encode_exact_in_single(key, zero_for_one, amount_in, min_out, hook_data=b"")
     actions = bytes([SWAP_EXACT_IN_SINGLE, SETTLE_ALL, TAKE_ALL])
     params = [
         encode(
-            ["(" + POOL_KEY + ",bool,uint128,uint128,bytes)"],
-            [(key_tuple(key), bool(zero_for_one), int(amount_in), int(min_out), hook_data)],
+            [EXACT_IN_SINGLE_PARAMS],
+            [(key_tuple(key), bool(zero_for_one), int(amount_in), int(min_out), NO_HOP_PRICE_LIMIT, hook_data)],
         ),
         encode(["address", "uint256"], [currency_in, int(amount_in)]),
         encode(["address", "uint256"], [currency_out, int(min_out)]),
@@ -297,8 +306,8 @@ def encode_exact_in_path(keys, currency_in, amount_in, min_out):
     actions = bytes([SWAP_EXACT_IN, SETTLE_ALL, TAKE_ALL])
     params = [
         encode(
-            ["(address," + PATH_KEY + "[],uint128,uint128)"],
-            [(checksum(currency_in), path, int(amount_in), int(min_out))],
+            [EXACT_IN_PARAMS],
+            [(checksum(currency_in), path, [NO_HOP_PRICE_LIMIT] * len(path), int(amount_in), int(min_out))],
         ),
         encode(["address", "uint256"], [checksum(currency_in), int(amount_in)]),
         encode(["address", "uint256"], [currency_out, int(min_out)]),
