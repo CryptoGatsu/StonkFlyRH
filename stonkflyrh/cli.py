@@ -1055,8 +1055,13 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
                 raise
             failures += 1
             wait = min(300, settings.rpc_error_backoff_seconds * failures)
+            frames = traceback.extract_tb(e.__traceback__)
+            root = Path(__file__).parent
+            where = [f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in frames
+                     if Path(f.filename).is_relative_to(root)]
             print(json.dumps({"transient": type(e).__name__, "reason": str(e)[:300],
-                              "consecutive": failures, "retry_in_seconds": wait}), flush=True)
+                              "at": where[-6:], "consecutive": failures,
+                              "retry_in_seconds": wait}), flush=True)
             if failures >= settings.rpc_error_tolerance:
                 raise
             until = time.monotonic() + wait
