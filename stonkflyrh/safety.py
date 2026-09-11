@@ -127,6 +127,15 @@ class Verdict:
         return self.error is None and all(c.passed for c in self.checks)
 
     @property
+    def tradeable(self):
+        """Approved for membership of the universe: everything about the token
+        and its pool clears. The buy dry-run is judged separately, because a
+        refusal there can be the run's own path failing rather than the token;
+        it still vetoes the buy, and it shows on the screen, but it does not
+        throw the token out."""
+        return self.error is None and all(c.passed for c in self.checks if c.name != "executable")
+
+    @property
     def retry(self):
         """Withheld for a reason that time fixes (an empty pool awaiting its
         liquidity), so the candidate should be looked at again, not remembered

@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 
 from stonkflyrh import v4
 from stonkflyrh.chain import checksum
@@ -440,7 +442,11 @@ class ExecVenue(StateVenue):
         return Call()
 
 
-def test_a_token_whose_buy_reverts_is_withheld_on_a_live_run(tmp_path):
+def test_a_token_whose_buy_reverts_stays_in_the_universe_but_cannot_be_bought(tmp_path):
+    """The dry-run can fail because the run's own swap path is broken, not the
+    token; so it vetoes the buy and shows on the screen without evicting."""
+    from stonkflyrh.risk import Veto
+
     logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
     pools = {v4.pool_id(coin_key()): (10**20, 2**96)}
     ledger, _, market, disc = build(tmp_path, logs, {COIN: ("WOOF", 18)})
@@ -450,10 +456,15 @@ def test_a_token_whose_buy_reverts_is_withheld_on_a_live_run(tmp_path):
     disc.screen.wallet = checksum("0x" + "fe" * 20)
     try:
         report = disc.scan(time.time(), ETH_USD)
-        assert report["added"] == []
-        reason = report["rejected"][0]["reason"]
-        assert reason.startswith("executable: a buy at the run's order size reverted")
+        assert [a["symbol"] for a in report["added"]] == ["WOOF"]
         assert venue.simulated == [(COIN, disc.screen.wallet)]
+        verdict = ledger.screen_raw("WOOF")
+        assert not verdict["approved"]
+        check = next(c for c in verdict["checks"] if c["name"] == "executable")
+        assert not check["passed"] and "reverted" in check["detail"]
+        with pytest.raises(Veto, match="executable"):
+            disc.screen.require("WOOF", ledger.universe()["WOOF"]["pool"], ETH_USD)
+        assert disc.prune(time.time() + 1, ETH_USD) == []      # not evicted
     finally:
         ledger.close()
 

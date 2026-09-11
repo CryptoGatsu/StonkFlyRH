@@ -490,7 +490,7 @@ class PoolDiscovery:
         self.registry.add_token(entry)
         self.market.add_product(symbol, entry["pool"], entry["pool_fee"], venue, entry.get("route"))
         verdict = self.screen.assess(symbol, entry["pool"], eth_usd, now, force=True)
-        if not verdict.approved:
+        if not verdict.tradeable:
             self.registry.remove_token(symbol)
             self.market.remove_product(symbol)
             if verdict.retry:
@@ -539,7 +539,7 @@ class PoolDiscovery:
             self.registry.add_token(entry)
             self.market.add_product(symbol, entry["pool"], entry["pool_fee"], entry.get("venue", "v3"), entry.get("route"))
             verdict = self.screen.assess(symbol, entry["pool"], eth_usd, now, force=True)
-            if verdict.approved:
+            if verdict.tradeable:
                 clean = {k: v for k, v in entry.items() if k not in ("reason", "dropped_at", "drops")}
                 clean["readmitted_at"] = now
                 self.l.add_to_universe(clean)
@@ -568,7 +568,7 @@ class PoolDiscovery:
             if entry.get("source") == "seed" or held.get(symbol, D(0)) > 0:
                 continue
             verdict = self.screen.assess(symbol, entry["pool"], eth_usd, now)
-            if not verdict.approved:
+            if not verdict.tradeable:
                 self.l.remove_from_universe(symbol, verdict.reason(), now)
                 self.registry.remove_token(symbol)
                 self.market.remove_product(symbol)
