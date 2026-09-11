@@ -417,6 +417,32 @@ class PoolDiscovery:
         self.l.record_event("migration", report)
         return report
 
+    def heal_lost_drops(self, now):
+        """Tokens evicted before drops were recorded are marked 'added' in the
+        candidates table yet sit in neither the universe nor the dropped list,
+        so the scan skips them for good. Forget those marks and rewind once."""
+        if self.l.get("healed_lost_drops"):
+            return None
+        present = {checksum(e["address"]) for e in self.l.universe().values() if e.get("address")}
+        present |= {checksum(e["address"]) for e in self.l.dropped().values() if e.get("address")}
+        lost = [
+            r[0] for r in self.l.db.execute("SELECT address FROM candidates WHERE outcome='added'")
+            if checksum(r[0]) not in present
+        ]
+        for address in lost:
+            self.l.db.execute("DELETE FROM candidates WHERE address=?", (address,))
+        report = {"at": now, "forgotten_lost_drops": len(lost)}
+        if lost:
+            head = int(self.client.w3.eth.block_number)
+            start = max(0, head - int(self.s.discovery_lookback_blocks))
+            with self.l.transaction():
+                self.l.put("discovery_block", start)
+                self.l.put("discovery_backlog", head - start)
+            report["rescan_from_block"] = start
+        self.l.put("healed_lost_drops", True)
+        self.l.record_event("migration", report)
+        return report
+
     def due(self, now):
         # With a backlog still to cover, or candidates still queued, scan again
         # soon rather than in ten minutes.

@@ -1109,6 +1109,9 @@ def _loop(a, settings, net, out, ledger, broker, market, oracle, client, registr
             healed = discovery.heal(time.time())
             if healed and healed.get("cleared_stale_rejections"):
                 print(json.dumps({"discovery_healed": healed}), flush=True)
+            lost = discovery.heal_lost_drops(time.time())
+            if lost and lost.get("forgotten_lost_drops"):
+                print(json.dumps({"discovery_healed": lost}), flush=True)
 
     provenance = {
         "settings": dataclasses.asdict(settings),

@@ -517,3 +517,21 @@ def test_a_missing_allowance_is_not_held_against_the_token(tmp_path):
         assert check["passed"] and "not in place" in check["detail"]
     finally:
         ledger.close()
+
+
+def test_tokens_evicted_before_drops_were_recorded_are_found_again(tmp_path):
+    logs = [init_log(USDG, COIN, 30000, 60, PONS_HOOK, 4900)]
+    ledger, registry, market, disc = build(tmp_path, logs, {COIN: ("WOOF", 18)})
+    try:
+        now = time.time()
+        assert [a["symbol"] for a in disc.scan(now, ETH_USD)["added"]] == ["WOOF"]
+        # Evicted the old way: gone from the universe, nothing remembered.
+        universe = ledger.universe(); universe.pop("WOOF"); ledger.put("universe", universe)
+        registry.remove_token("WOOF"); market.remove_product("WOOF")
+        assert disc.scan(now + 700, ETH_USD)["added"] == []          # skipped as already seen
+        report = disc.heal_lost_drops(now + 701)
+        assert report["forgotten_lost_drops"] == 1
+        assert disc.heal_lost_drops(now + 702) is None
+        assert [a["symbol"] for a in disc.scan(now + 800, ETH_USD)["added"]] == ["WOOF"]
+    finally:
+        ledger.close()
