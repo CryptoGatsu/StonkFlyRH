@@ -22,6 +22,7 @@ reputation service, no allowlist, no score from anywhere else.
 | `pool_age` | v4: seconds since the block the pool was initialised in | younger than 30 minutes |
 | `executable` | v4, live runs only: the real buy at the run's order size, dry-run through the Universal Router from the fly wallet | it reverts — a quote never moves tokens, so a token whose transfer refuses the router (honeypot, blacklist, trading not open) passes every quote and fails here. A missing approval is not held against the token. This check vetoes the buy and shows on the site but never evicts a token from the universe: the run's own swap path can be what is failing |
 | `activity` | the pool's own `Swap` events in the last `activity_window_seconds` (1 h) | fewer than `min_recent_swaps` (5): nobody is trading it |
+| `crash` | v4: the price path from sqrtPriceX96 in the pool's swap events over `crash_window_seconds` (6 h) | the token sits more than `max_recent_drawdown` (60%) below its high in the window: a rug still being traded |
 | `market_cap` | price × total supply, from the run's own quote | under `min_market_cap_usd` ($10,000): a graveyard, however deep the pool |
 | `pool_empty` | v4: liquidity is zero | the pool exists but has no liquidity yet (a Pons token before graduation): not a rejection — the candidate is screened again every 30 minutes for a day |
 | `sellable` | quoter, token → USDG | the sell leg returns nothing: a honeypot |

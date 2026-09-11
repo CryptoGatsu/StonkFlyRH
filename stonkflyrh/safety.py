@@ -231,15 +231,20 @@ class RugScreen:
         address = checksum(entry["address"])
         if not force:
             cached = self.l.screen_get(product, now, self.s.screen_ttl_seconds)
-            if cached and cached["address"] == address:
+            # A verdict from before a screen change is not this screen's verdict.
+            if cached and cached["address"] == address and cached.get("screen_version") == self.SCREEN_VERSION:
                 return Verdict.from_json(cached)
         verdict = Verdict(product, address, now)
         try:
             verdict.checks = self._run(product, entry, pool, eth_usd)
         except Exception as e:
             verdict.error = f"{type(e).__name__}: {e}"
-        self.l.screen_put(product, verdict.json(), now)
+        self.l.screen_put(product, {**verdict.json(), "screen_version": self.SCREEN_VERSION}, now)
         return verdict
+
+    # Bump when a check is added or its meaning changes: cached verdicts from
+    # an older screen are then re-run rather than trusted.
+    SCREEN_VERSION = 3
 
     def _run(self, product, entry, pool, eth_usd):
         address = checksum(entry["address"])
@@ -273,8 +278,30 @@ class RugScreen:
             if judged is not None:
                 passed, detail, swaps = judged
                 checks.append(Check("activity", passed, detail, swaps))
+        if self.activity is not None and self.s.activity_enabled and hasattr(self.activity, "drawdown"):
+            try:
+                crash = self.activity.drawdown(product, entry, None)
+            except Exception as e:
+                crash = None
+                checks.append(Check("crash", True, f"could not read the price path: {type(e).__name__}", None))
+            if crash is not None:
+                ceiling = D(self.s.max_recent_drawdown)
+                dd = D(str(crash["drawdown"]))
+                hours = float(crash["window_seconds"]) / 3600
+                checks.append(Check(
+                    "crash", dd < ceiling,
+                    f"{dd * 100:.0f}% below its {hours:.0f}h high over {crash['swaps']} swaps, ceiling {ceiling * 100:.0f}%",
+                    str(dd),
+                ))
         floor = D(self.s.min_market_cap_usd)
         supply = entry.get("total_supply")
+        if floor > 0 and not supply and entry.get("address"):
+            # The universe entry predates supply tracking: ask the token now
+            # rather than skip the check.
+            try:
+                supply = str(int(self.client.total_supply(entry["address"])))
+            except Exception:
+                supply = None
         if floor > 0 and supply:
             try:
                 qd = self.registry.quote_decimals

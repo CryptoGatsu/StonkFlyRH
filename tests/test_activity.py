@@ -140,3 +140,30 @@ def test_the_flys_own_swaps_do_not_count_as_activity(tmp_path):
         assert result["swaps"] == 1                      # the other wallet's swap only
     finally:
         ledger.close()
+
+
+def swap_with_price(block, sqrt_p, index=0):
+    amount0 = (0).to_bytes(32, "big"); amount1 = (0).to_bytes(32, "big")
+    price = int(sqrt_p * 2**96).to_bytes(32, "big")
+    rest = bytes(32) * 3
+    return {"address": PM, "topics": [swap_topic(SWAP_V4), POOL_ID], "blockNumber": block,
+            "logIndex": index, "data": amount0 + amount1 + price + rest}
+
+
+def test_drawdown_is_read_from_the_price_path_in_swap_events(tmp_path):
+    """Token is currency1 of its ETH pool: a rising sqrtPrice is a falling
+    token price. High early, a 97% collapse later, still trading."""
+    key = {"currency0": "0x" + "00" * 20, "currency1": TOKEN, "fee": 30000, "tickSpacing": 60, "hooks": "0x" + "00" * 20}
+    entry = {**V4_ENTRY, "route": [key]}
+    # price = 1/sqrtP^2: sqrtP 1.0 -> 1.0; sqrtP 5.77 -> 0.03 (97% down)
+    logs = [swap_with_price(90_000, 1.0), swap_with_price(95_000, 1.2), swap_with_price(99_000, 5.77)]
+    _, ledger, monitor = build(tmp_path, logs, crash_window_seconds=21_600)
+    try:
+        result = monitor.drawdown("WOOF", entry, now=1000.0)
+        assert result["swaps"] == 3 and 0.96 < result["drawdown"] < 0.98
+        # Token as currency0: the same sqrtPrice path is a 33x rise, no drawdown at the end.
+        entry0 = {**V4_ENTRY, "route": [{**key, "currency0": TOKEN, "currency1": "0x" + "ee" * 20}]}
+        monitor._cache.clear()
+        assert monitor.drawdown("WOOF", entry0, now=1000.0)["drawdown"] == 0.0
+    finally:
+        ledger.close()

@@ -130,6 +130,10 @@ class Settings:
     activity_window_seconds: float = 3600
     dead_after_seconds: float = 14400
     min_market_cap_usd: str = "10000"
+    # A coin far below its recent high is a rug still being traded. The high
+    # comes from the pool's own swap events over the window.
+    max_recent_drawdown: str = "0.6"
+    crash_window_seconds: float = 21600
 
     # -- airdrop ------------------------------------------------------------
     # The operator's coin, sent from the deployer wallet to wallets that bought
@@ -249,6 +253,10 @@ class Settings:
             raise ValueError("dead_after_seconds must be 10 minutes to a week")
         if D(self.min_market_cap_usd) < 0:
             raise ValueError("Market cap floor cannot be negative")
+        if not D(0) < D(self.max_recent_drawdown) <= D(1):
+            raise ValueError("max_recent_drawdown must be a fraction between 0 and 1")
+        if not math.isfinite(self.crash_window_seconds) or not 600 <= self.crash_window_seconds <= 7 * 86400:
+            raise ValueError("crash_window_seconds must be 10 minutes to a week")
 
     def _check_airdrop(self):
         if type(self.airdrop_enabled) is not bool:

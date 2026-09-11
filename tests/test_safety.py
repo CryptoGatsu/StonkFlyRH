@@ -556,3 +556,20 @@ def test_the_screen_asks_whether_anyone_is_here(tmp_path):
         assert not {c.name: c for c in screen._market("PONS", small)}["market_cap"].passed
     finally:
         ledger.close()
+
+
+def test_a_cached_verdict_from_an_older_screen_is_not_trusted(tmp_path):
+    from stonkflyrh.safety import RugScreen
+
+    _, ledger, screen, chain = build(tmp_path)
+    try:
+        first = screen.assess("PONS", POOL, ETH_USD, now=1000.0)
+        assert first.approved
+        # A verdict written by an older screen version: rerun, not reused.
+        stale = {**first.json(), "screen_version": RugScreen.SCREEN_VERSION - 1}
+        ledger.screen_put("PONS", stale, 1000.0)
+        chain.sellable = False
+        again = screen.assess("PONS", POOL, ETH_USD, now=1001.0)
+        assert not again.approved
+    finally:
+        ledger.close()

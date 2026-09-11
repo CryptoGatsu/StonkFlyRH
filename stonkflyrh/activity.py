@@ -28,6 +28,16 @@ def _tx_hash(log):
     return text.lower() if text.startswith("0x") else "0x" + text.lower()
 
 
+def _swap_sqrt_price(log):
+    """sqrtPriceX96 from a v4 Swap event: the third data word (amount0,
+    amount1, sqrtPriceX96, liquidity, tick, fee), as a float."""
+    data = log.get("data")
+    raw = bytes(data) if not isinstance(data, str) else bytes.fromhex(data[2:])
+    if len(raw) < 32 * 3:
+        return None
+    return int.from_bytes(raw[64:96], "big") / 2**96
+
+
 def swap_topic(signature):
     from eth_utils import keccak
 
@@ -123,6 +133,48 @@ class ActivityMonitor:
         published[product] = {k: v for k, v in result.items() if k != "window"}
         self.l.put("activity", published)
         return result
+
+    # -- price path -------------------------------------------------------------
+
+    def drawdown(self, product, entry, now=None):
+        """How far the token sits below its high over `crash_window_seconds`,
+        read from sqrtPriceX96 in the pool's own swap events. None when the
+        window holds no swaps or the venue is not v4."""
+        if entry.get("venue", "v3") != "v4":
+            return None
+        now = time.time() if now is None else now
+        window = float(self.s.crash_window_seconds)
+        key = f"{product}:crash"
+        cached = self._cache.get(key)
+        if cached and now - cached["checked_at"] < self.CACHE_SECONDS * 4:
+            return cached["value"]
+        head = int(self.client.w3.eth.block_number)
+        blocks = max(1, int(window / self.seconds_per_block()))
+        params = {
+            "fromBlock": max(0, head - blocks),
+            "toBlock": head,
+            "address": checksum((self.registry.v4 or {})["pool_manager"]),
+            "topics": [self.topic_v4, entry["pool"]],
+        }
+        logs, _ = self.client.logs(params, chunk=10000)
+        prices = []
+        for log in sorted(logs, key=lambda l: (int(l["blockNumber"]), int(l.get("logIndex", 0)))):
+            sqrt_p = _swap_sqrt_price(log)
+            if sqrt_p:
+                prices.append(sqrt_p)
+        value = None
+        if len(prices) >= 2:
+            # sqrtPrice is token1 per token0. The token's own price rises with
+            # it when the token is currency0, and falls with it otherwise.
+            route = entry.get("route") or []
+            key0 = route[-1]["currency0"] if route else None
+            token_is_0 = key0 is not None and checksum(key0) == checksum(entry["address"])
+            series = [p * p for p in prices] if token_is_0 else [1 / (p * p) for p in prices]
+            high, last = max(series), series[-1]
+            value = {"drawdown": (high - last) / high if high > 0 else 0.0, "swaps": len(series),
+                     "window_seconds": window}
+        self._cache[key] = {"checked_at": now, "value": value}
+        return value
 
     # -- judgements -------------------------------------------------------------
 
