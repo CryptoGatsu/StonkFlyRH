@@ -85,6 +85,12 @@ def build_parser():
     resume = sub.add_parser("resume", help="Clear a halt after review, when no order is unresolved")
     resume.add_argument("--out", type=Path, default=Path("runs/live"))
 
+    sell = sub.add_parser("sell", help="Ask the running worker to sell a held coin, whole, on its next tick")
+    sell.add_argument("product", help="Symbol as shown on the site, e.g. RETAIL")
+    sell.add_argument("--out", type=Path, default=Path("runs/live"))
+    sell.add_argument("--block", action="store_true", help="Also blocklist it for the rest of the run")
+    sell.add_argument("--cancel", action="store_true", help="Withdraw an earlier request that has not filled")
+
     serve = sub.add_parser("serve", help="Serve the live trade website")
     serve.add_argument("--out", type=Path, default=Path("runs/paper"))
     serve.add_argument("--host", default="127.0.0.1")
@@ -751,6 +757,60 @@ def cmd_probe(a):
             node = calls[-1] if calls else None
         report["trace"][name] = {"keys": sorted(trace.keys())[:10], "failing_path": path[-8:]}
     print(json.dumps(report, indent=2, default=str))
+
+
+def _sell_request_path(out, product):
+    return out / f"SELL-{product}"
+
+
+def _sell_requests(out):
+    """Operator requests waiting in the run directory, by product."""
+    found = {}
+    for path in sorted(out.glob("SELL-*")):
+        product = path.name[len("SELL-"):]
+        try:
+            request = json.loads(path.read_text() or "{}")
+        except (OSError, json.JSONDecodeError):
+            request = {}
+        found[product] = {"product": product, "block": bool(request.get("block")), "at": request.get("at", 0)}
+    return found
+
+
+def cmd_sell(a):
+    """Leave a request the worker acts on at its next tick. The worker owns the
+    ledger, the wallet and the nonce, so the sell goes through it rather than
+    around it: this command touches nothing but a file."""
+    import sqlite3
+
+    product = a.product.strip().upper()
+    path = _sell_request_path(a.out, product)
+    if a.cancel:
+        existed = path.exists()
+        path.unlink(missing_ok=True)
+        print(json.dumps({"sell": product, "cancelled": existed}))
+        return
+    ledger_path = a.out / "ledger.sqlite"
+    if not ledger_path.exists():
+        raise RuntimeError(f"No ledger at {ledger_path}")
+    db = sqlite3.connect(f"file:{ledger_path}?mode=ro", uri=True, timeout=5)
+    try:
+        meta = {k: json.loads(v) for k, v in db.execute("SELECT key,value FROM meta")}
+    finally:
+        db.close()
+    positions = meta.get("positions") or {}
+    held = D(str(positions.get(product, "0")))
+    if held <= 0:
+        known = ", ".join(sorted(positions)) or "nothing"
+        raise RuntimeError(f"The fly holds no {product}. Held: {known}")
+    path.write_text(json.dumps({"product": product, "block": bool(a.block), "at": time.time()}) + "\n")
+    print(json.dumps({
+        "sell": product,
+        "held": str(held),
+        "block": bool(a.block),
+        "note": "The worker sells the whole position on its next tick and removes this request when "
+                "the order fills. A veto (cooldown, a pool that will not quote) is retried every tick; "
+                f"`sell {product} --cancel` withdraws it.",
+    }))
 
 
 def cmd_resume(a):
@@ -1474,7 +1534,22 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
         # A written-off coin has nothing to observe; rotate over the live ones.
         observable = [p for p in universe if p not in written_off] or universe
         product = _pick_product(observable, ledger, activity, settings, time.time())
-        if activity is not None:
+        # The operator's `sell` requests: a held, quotable coin jumps the
+        # rotation; one that is not held (or cannot be quoted) is cleared.
+        requests = _sell_requests(out)
+        asked = []
+        for requested, request in requests.items():
+            if ledger.positions.get(requested, D(0)) <= 0:
+                _sell_request_path(out, requested).unlink(missing_ok=True)
+                print(json.dumps({"sell_request": requested, "dropped": "the fly holds none"}), flush=True)
+            elif requested not in quotes or quotes[requested].written_off:
+                print(json.dumps({"sell_request": requested, "waiting": "the pool will not quote"}), flush=True)
+            else:
+                asked.append(requested)
+        guard.exit_requests = set(asked)
+        if asked:
+            product = asked[0]
+        if activity is not None and not asked:
             # A held coin whose pool has died jumps the rotation: the exit
             # happens this tick, not whenever its turn comes round.
             for held_product, amount in ledger.positions.items():
@@ -1550,7 +1625,12 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
         screen_json = None
         side = neural["side"]
         forced = None
-        if activity is not None and ledger.positions.get(product, D(0)) * q.bid >= limits["min_order"]:
+        request = requests.get(product) if product in asked else None
+        if request is not None:
+            forced = "sold on the operator's instruction"
+            if request["block"] and not ledger.is_blocked(product):
+                ledger.block(product, "operator: " + forced, time.time())
+        elif activity is not None and ledger.positions.get(product, D(0)) * q.bid >= limits["min_order"]:
             # A held coin whose pool has gone quiet is left, whatever the brain
             # says: nobody will take the other side later. Blocklisting it
             # widens the exit spread the way a rug does and stops a re-buy.
@@ -1561,11 +1641,11 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
                 )
             except Exception:
                 forced = None
-            if forced:
-                side = "SELL"
-                if not ledger.is_blocked(product):
-                    ledger.block(product, "dead pool: " + forced, time.time())
-                    ledger.record_event("dead_pool", {"at": time.time(), "product": product, "reason": forced})
+        if forced:
+            side = "SELL"
+            if request is None and not ledger.is_blocked(product):
+                ledger.block(product, "dead pool: " + forced, time.time())
+                ledger.record_event("dead_pool", {"at": time.time(), "product": product, "reason": forced})
         if side != "HOLD":
             try:
                 fresh = market.snapshot(limits["order_limit"])
@@ -1595,6 +1675,10 @@ def _tick(a, settings, net, out, ledger, broker, market, oracle, client, guard, 
         if forced:
             order = {**order, "forced": forced}
             neural = {**neural, "side": "SELL", "forced": forced}
+        if request is not None and order.get("status") in ("FILLED", "SETTLED"):
+            _sell_request_path(out, product).unlink(missing_ok=True)
+            ledger.record_event("operator_sells", {"at": time.time(), "product": product, "block": request["block"],
+                                                   "tx_hash": order.get("tx_hash")})
         if screen is not None:
             screen_json = ledger.screen_raw(product)
 
@@ -1684,6 +1768,7 @@ def main():
         "discovery": cmd_discovery,
         "airdrop": cmd_airdrop,
         "resume": cmd_resume,
+        "sell": cmd_sell,
         "probe": cmd_probe,
         "preview": cmd_preview,
         "serve": cmd_serve,

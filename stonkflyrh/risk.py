@@ -52,6 +52,9 @@ class Guard:
         self.screen = screen
         # Set by the run when activity tracking is on: the heat gate on buys.
         self.activity = None
+        # Coins the operator has asked the run to leave (the `sell` command):
+        # sold whole, through the exit spread, like a rug.
+        self.exit_requests = set()
 
     # -- dollar limits ------------------------------------------------------
 
@@ -85,7 +88,7 @@ class Guard:
         return D(1) - (D(1) - floor) * span, vol
 
     def exiting_a_rug(self, product, side):
-        return side == "SELL" and self.l.is_blocked(product)
+        return side == "SELL" and (self.l.is_blocked(product) or product in self.exit_requests)
 
     def spread_limit(self, product, side):
         """The round-trip cost this trade may pay. Wider only to leave a rug."""

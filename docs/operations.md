@@ -172,6 +172,20 @@ node would not accept clear themselves on the next start.
 boundary. Ctrl-C stops after the current tick. Both preserve run state; the same command
 resumes.
 
+## Selling a coin by hand
+
+```sh
+sudo -u stonkfly .venv/bin/python -m stonkflyrh sell RETAIL --out runs/live --block
+```
+
+Leaves a request the running worker acts on at its next tick: the whole position is
+sold through the wide exit spread, the way a rug is left, and the request is removed
+when the order fills. `--block` also blocklists the coin for the rest of the run so the
+fly cannot buy it back; without it the ordinary re-entry cooldown applies. A veto (order
+cooldown, a pool that will not quote) is retried every tick; `sell RETAIL --cancel`
+withdraws the request. The worker owns the wallet and the ledger, so nothing is signed
+by this command itself.
+
 ## When something goes wrong
 
 The worker halts and writes `error.json` rather than continuing. Dependency exception
